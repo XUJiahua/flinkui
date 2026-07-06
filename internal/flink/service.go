@@ -234,3 +234,18 @@ func (s *Service) Logs(ctx context.Context, name string, tail int64) (string, er
 	selector := fmt.Sprintf("app=%s,component=jobmanager", dep)
 	return s.acc.PodLogs(ctx, selector, "flink-main-container", tail)
 }
+
+// RecoveryDirs returns the deployment's configured savepoint and checkpoint
+// directories (spec.flinkConfiguration state.savepoints.dir / state.checkpoints.dir).
+// These are the authoritative S3 locations for the rollback recovery-point
+// selector; empty strings are returned when the deployment does not set them.
+func (s *Service) RecoveryDirs(ctx context.Context, name string) (savepointsDir, checkpointsDir string, err error) {
+	dep := s.cfg.DeploymentName(name)
+	u, err := s.acc.GetFlinkDeployment(ctx, dep)
+	if err != nil {
+		return "", "", err
+	}
+	savepointsDir, _, _ = unstructured.NestedString(u.Object, "spec", "flinkConfiguration", "state.savepoints.dir")
+	checkpointsDir, _, _ = unstructured.NestedString(u.Object, "spec", "flinkConfiguration", "state.checkpoints.dir")
+	return savepointsDir, checkpointsDir, nil
+}

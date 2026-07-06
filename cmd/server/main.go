@@ -41,7 +41,7 @@ func main() {
 
 	// S3 store is optional; log and continue if unconfigured.
 	var st *store.Store
-	if cfg.Cluster.S3.Bucket != "" {
+	if cfg.Cluster.S3.Endpoint != "" || cfg.Cluster.S3.AccessKey != "" {
 		st, err = store.New(context.Background(), cfg.Cluster.S3)
 		if err != nil {
 			log.Printf("warning: S3 store disabled: %v", err)

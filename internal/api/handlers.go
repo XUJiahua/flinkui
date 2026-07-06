@@ -105,8 +105,16 @@ func (h *Handlers) recoveryPoints(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "S3 not configured"})
 		return
 	}
-	job := h.cfg.JobName(h.cfg.DeploymentName(c.Param("name")))
-	points, err := h.store.ListRecoveryPoints(c.Request.Context(), job)
+	name := c.Param("name")
+	job := h.cfg.JobName(h.cfg.DeploymentName(name))
+	// Prefer the deployment's own configured savepoint/checkpoint dirs so the
+	// listing works regardless of bucket/prefix layout.
+	spDir, cpDir, err := h.svc.RecoveryDirs(c.Request.Context(), name)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	points, err := h.store.ListRecoveryPoints(c.Request.Context(), job, spDir, cpDir)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

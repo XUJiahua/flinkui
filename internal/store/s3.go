@@ -4,7 +4,9 @@ package store
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -27,15 +29,24 @@ type RecoveryPoint struct {
 
 // Store lists recovery points from an S3-compatible object store.
 type Store struct {
-	client *s3.Client
-	bucket string
+	client        *s3.Client
+	defaultBucket string // fallback bucket when a deployment dir is not provided
 }
 
-// New builds a Store, or returns (nil, error) if S3 is not configured.
-func New(ctx context.Context, cfg config.S3Config) (*Store, error) {
-	if cfg.Bucket == "" {
-		return nil, fmt.Errorf("s3 bucket not configured")
+// httpClient returns an HTTP client for the S3 SDK. When insecure is set it
+// skips TLS verification, for internal MinIO endpoints with self-signed certs.
+func httpClient(insecure bool) *http.Client {
+	if !insecure {
+		return http.DefaultClient
 	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // internal MinIO self-signed cert
+	return &http.Client{Transport: tr}
+}
+
+// New builds a Store. It is intended to be called only when S3 is configured
+// (endpoint or credentials present).
+func New(ctx context.Context, cfg config.S3Config) (*Store, error) {
 	region := cfg.Region
 	if region == "" {
 		region = "us-east-1"
@@ -46,6 +57,7 @@ func New(ctx context.Context, cfg config.S3Config) (*Store, error) {
 		awsconfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
 		),
+		awsconfig.WithHTTPClient(httpClient(cfg.Insecure)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
@@ -57,36 +69,69 @@ func New(ctx context.Context, cfg config.S3Config) (*Store, error) {
 		}
 		o.UsePathStyle = cfg.PathStyle
 	})
-	return &Store{client: client, bucket: cfg.Bucket}, nil
+	return &Store{client: client, defaultBucket: cfg.Bucket}, nil
 }
 
-// ListRecoveryPoints returns savepoints and checkpoints for a job, newest first.
-func (s *Store) ListRecoveryPoints(ctx context.Context, job string) ([]RecoveryPoint, error) {
+// ListRecoveryPoints lists savepoints and checkpoints for a job, newest first.
+// savepointsDir/checkpointsDir are the deployment's configured s3:// dirs
+// (spec.flinkConfiguration state.savepoints.dir / state.checkpoints.dir); when
+// empty they fall back to <defaultBucket>/savepoints|checkpoints/<job>.
+func (s *Store) ListRecoveryPoints(ctx context.Context, job, savepointsDir, checkpointsDir string) ([]RecoveryPoint, error) {
 	var points []RecoveryPoint
 
-	sps, err := s.listSavepoints(ctx, job)
-	if err != nil {
-		return nil, err
-	}
-	points = append(points, sps...)
+	spBucket, spPrefix := s.resolve(savepointsDir, "savepoints/"+job)
+	cpBucket, cpPrefix := s.resolve(checkpointsDir, "checkpoints/"+job)
 
-	cps, err := s.listCheckpoints(ctx, job)
-	if err != nil {
-		return nil, err
+	if spBucket != "" {
+		sps, err := s.listSavepoints(ctx, spBucket, spPrefix)
+		if err != nil {
+			return nil, err
+		}
+		points = append(points, sps...)
 	}
-	points = append(points, cps...)
+	if cpBucket != "" {
+		cps, err := s.listCheckpoints(ctx, cpBucket, cpPrefix)
+		if err != nil {
+			return nil, err
+		}
+		points = append(points, cps...)
+	}
 
 	sort.Slice(points, func(i, j int) bool { return points[i].Modified.After(points[j].Modified) })
 	return points, nil
 }
 
-// listSavepoints lists directories under savepoints/<job>/ (each is a savepoint).
-func (s *Store) listSavepoints(ctx context.Context, job string) ([]RecoveryPoint, error) {
-	prefix := fmt.Sprintf("savepoints/%s/", job)
-	var out []RecoveryPoint
+// resolve turns a possibly-empty s3:// dir URI into (bucket, keyPrefix). When
+// the URI is empty it uses the configured default bucket with fallbackKey.
+func (s *Store) resolve(dirURI, fallbackKey string) (bucket, prefix string) {
+	if strings.HasPrefix(dirURI, "s3://") || strings.HasPrefix(dirURI, "s3a://") {
+		rest := dirURI
+		rest = strings.TrimPrefix(rest, "s3://")
+		rest = strings.TrimPrefix(rest, "s3a://")
+		parts := strings.SplitN(rest, "/", 2)
+		bucket = parts[0]
+		if len(parts) == 2 {
+			prefix = parts[1]
+		}
+		return bucket, ensureSlash(prefix)
+	}
+	return s.defaultBucket, ensureSlash(fallbackKey)
+}
 
+func ensureSlash(p string) string {
+	p = strings.TrimSuffix(p, "/")
+	if p == "" {
+		return ""
+	}
+	return p + "/"
+}
+
+// listSavepoints lists directories directly under the savepoints prefix
+// (each is a savepoint-xxxx directory).
+func (s *Store) listSavepoints(ctx context.Context, bucket, prefix string) ([]RecoveryPoint, error) {
+	var out []RecoveryPoint
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
-		Bucket:    aws.String(s.bucket),
+		Bucket:    aws.String(bucket),
 		Prefix:    aws.String(prefix),
 		Delimiter: aws.String("/"),
 	})
@@ -103,23 +148,22 @@ func (s *Store) listSavepoints(ctx context.Context, job string) ([]RecoveryPoint
 			name := dir[strings.LastIndex(dir, "/")+1:]
 			out = append(out, RecoveryPoint{
 				Type:     "savepoint",
-				Path:     fmt.Sprintf("s3://%s/%s", s.bucket, dir),
+				Path:     fmt.Sprintf("s3://%s/%s", bucket, dir),
 				Name:     name,
-				Modified: s.dirModified(ctx, *cp.Prefix),
+				Modified: s.dirModified(ctx, bucket, *cp.Prefix),
 			})
 		}
 	}
 	return out, nil
 }
 
-// listCheckpoints finds chk-N directories under checkpoints/<job>/ by locating
-// their _metadata files (design §4.2).
-func (s *Store) listCheckpoints(ctx context.Context, job string) ([]RecoveryPoint, error) {
-	prefix := fmt.Sprintf("checkpoints/%s/", job)
+// listCheckpoints finds chk-N directories under the checkpoints prefix by
+// locating their _metadata files (design §4.2). The layout is
+// <prefix>/<jobId>/chk-N/_metadata.
+func (s *Store) listCheckpoints(ctx context.Context, bucket, prefix string) ([]RecoveryPoint, error) {
 	var out []RecoveryPoint
-
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(s.bucket),
+		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),
 	})
 	for paginator.HasMorePages() {
@@ -139,7 +183,7 @@ func (s *Store) listCheckpoints(ctx context.Context, job string) ([]RecoveryPoin
 			}
 			out = append(out, RecoveryPoint{
 				Type:     "checkpoint",
-				Path:     fmt.Sprintf("s3://%s/%s", s.bucket, dir),
+				Path:     fmt.Sprintf("s3://%s/%s", bucket, dir),
 				Name:     name,
 				Modified: mod,
 			})
@@ -150,9 +194,9 @@ func (s *Store) listCheckpoints(ctx context.Context, job string) ([]RecoveryPoin
 
 // dirModified returns the newest LastModified among the first page of objects
 // under a savepoint directory (best-effort timestamp).
-func (s *Store) dirModified(ctx context.Context, prefix string) time.Time {
+func (s *Store) dirModified(ctx context.Context, bucket, prefix string) time.Time {
 	page, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:  aws.String(s.bucket),
+		Bucket:  aws.String(bucket),
 		Prefix:  aws.String(prefix),
 		MaxKeys: aws.Int32(1000),
 	})

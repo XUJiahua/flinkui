@@ -27,13 +27,16 @@ type ClusterConfig struct {
 
 // S3Config holds S3/MinIO connection info for recovery-point listing.
 type S3Config struct {
-	Endpoint     string `mapstructure:"endpoint"`
-	Bucket       string `mapstructure:"bucket"`
-	AccessKey    string `mapstructure:"access_key"`
-	SecretKey    string `mapstructure:"secret_key"`
-	Region       string `mapstructure:"region"`
-	PathStyle    bool   `mapstructure:"path_style"`
-	UseSSL       bool   `mapstructure:"use_ssl"`
+	Endpoint  string `mapstructure:"endpoint"`
+	Bucket    string `mapstructure:"bucket"`
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
+	Region    string `mapstructure:"region"`
+	PathStyle bool   `mapstructure:"path_style"`
+	UseSSL    bool   `mapstructure:"use_ssl"`
+	// Insecure skips TLS certificate verification, for internal MinIO endpoints
+	// that use a self-signed certificate.
+	Insecure bool `mapstructure:"insecure"`
 }
 
 // AuthConfig holds basic-auth credentials guarding the whole platform.
@@ -100,6 +103,7 @@ func Load(configFile string) (*Config, error) {
 		"cluster.name", "cluster.namespace", "cluster.kubeconfig", "cluster.context",
 		"cluster.s3.endpoint", "cluster.s3.bucket", "cluster.s3.access_key",
 		"cluster.s3.secret_key", "cluster.s3.region", "cluster.s3.path_style", "cluster.s3.use_ssl",
+		"cluster.s3.insecure",
 		"auth.username", "auth.password", "auth.session_secret",
 	} {
 		_ = v.BindEnv(key)
