@@ -46,9 +46,21 @@ func (s *Service) Savepoint(ctx context.Context, name string) (*SavepointResult,
 		return nil, fmt.Errorf("cannot get jobId (job not running?)")
 	}
 
-	targetDir := fmt.Sprintf("s3://%s/savepoints/%s", s.cfg.Cluster.S3.Bucket, s.cfg.JobName(dep))
+	// Determine the savepoint target directory. Prefer the deployment's own
+	// configured state.savepoints.dir (authoritative, includes any bucket/prefix
+	// layout). Fall back to the configured S3 bucket, else omit target-directory
+	// so the JobManager uses its configured default.
+	targetDir, _, _ := unstructured.NestedString(u.Object, "spec", "flinkConfiguration", "state.savepoints.dir")
+	if targetDir == "" && s.cfg.Cluster.S3.Bucket != "" {
+		targetDir = fmt.Sprintf("s3://%s/savepoints/%s", s.cfg.Cluster.S3.Bucket, s.cfg.JobName(dep))
+	}
 	selector := fmt.Sprintf("app=%s,component=jobmanager", dep)
-	body := fmt.Sprintf(`{"target-directory":%q,"cancel-job":false}`, targetDir)
+	var body string
+	if targetDir != "" {
+		body = fmt.Sprintf(`{"target-directory":%q,"cancel-job":false}`, targetDir)
+	} else {
+		body = `{"cancel-job":false}`
+	}
 
 	// Trigger.
 	triggerCmd := []string{
