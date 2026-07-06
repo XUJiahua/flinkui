@@ -1,0 +1,139 @@
+# In-cluster deployment for the Flink Job Console (design §3.4 / §3.5).
+# Grants the ServiceAccount the minimal permissions to observe and manage
+# FlinkDeployments: get/list/watch/patch the CRD, read pods & logs, exec into
+# the JobManager container to trigger savepoints, and read events.
+#
+# Apply into the namespace that holds your FlinkDeployments, e.g.:
+#   kubectl -n flink-operator apply -f deploy/rbac.yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flink-console
+  namespace: flink-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flink-console
+  namespace: flink-operator
+rules:
+  - apiGroups: ["flink.apache.org"]
+    resources: ["flinkdeployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flink-console
+  namespace: flink-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flink-console
+subjects:
+  - kind: ServiceAccount
+    name: flink-console
+    namespace: flink-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-console
+  namespace: flink-operator
+  labels:
+    app: flink-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-console
+  template:
+    metadata:
+      labels:
+        app: flink-console
+    spec:
+      serviceAccountName: flink-console
+      containers:
+        - name: flink-console
+          image: flinkui:latest # replace with your registry/image:tag
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            # In-cluster: leave FKO_CLUSTER_KUBECONFIG empty to use the ServiceAccount.
+            - name: FKO_ADDR
+              value: ":8080"
+            - name: FKO_CLUSTER_NAME
+              value: "in-cluster"
+            - name: FKO_CLUSTER_NAMESPACE
+              value: "flink-operator"
+            - name: FKO_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: flink-console-auth
+                  key: username
+            - name: FKO_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: flink-console-auth
+                  key: password
+            - name: FKO_AUTH_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: flink-console-auth
+                  key: session-secret
+            # S3 / MinIO for recovery-point listing (rollback selector).
+            - name: FKO_CLUSTER_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: flink-console-s3
+                  key: endpoint
+            - name: FKO_CLUSTER_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: flink-console-s3
+                  key: bucket
+            - name: FKO_CLUSTER_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: flink-console-s3
+                  key: access-key
+            - name: FKO_CLUSTER_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: flink-console-s3
+                  key: secret-key
+          readinessProbe:
+            httpGet:
+              path: /login.html
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-console
+  namespace: flink-operator
+spec:
+  selector:
+    app: flink-console
+  ports:
+    - port: 80
+      targetPort: 8080
