@@ -1,0 +1,8 @@
+bin/
+web/dist/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+.git/
+.DS_Store
+*.md
