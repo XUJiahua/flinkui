@@ -14,5 +14,6 @@
 # Local env / secrets (keep .env.example tracked)
 .env
 .env.local
+.sa.kubeconfig
 
 .DS_Store
