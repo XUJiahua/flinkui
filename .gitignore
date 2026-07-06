@@ -11,4 +11,8 @@
 /frontend/.next/
 /frontend/out/
 
+# Local env / secrets (keep .env.example tracked)
+.env
+.env.local
+
 .DS_Store
