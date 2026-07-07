@@ -47,6 +47,35 @@ type AuthConfig struct {
 	SessionSecret string `mapstructure:"session_secret"`
 }
 
+// LocalHAGroup declares one decentralized HA group from THIS instance's point of
+// view: the local side it manages plus the peer's clusterId and the shared-S3
+// coordination keys (design failover-decentralized §7). The peer's flinkui runs
+// a mirror-image config. Only the local cluster's k8s is ever touched here.
+type LocalHAGroup struct {
+	Name string `mapstructure:"name"`
+	// Local side (this cluster).
+	Namespace  string `mapstructure:"namespace"`
+	Deployment string `mapstructure:"deployment"`
+	ClusterID  string `mapstructure:"cluster_id"`
+	// Peer side (other cluster) — for display and handoff semantics only.
+	PeerClusterID string `mapstructure:"peer_cluster_id"`
+	// Shared-S3 coordination keys.
+	FencingKey   string `mapstructure:"fencing_key"`
+	NeutralToken string `mapstructure:"neutral_token"`
+	HandoffKey   string `mapstructure:"handoff_key"`
+}
+
+// HAConfig groups the decentralized HA declarations.
+type HAConfig struct {
+	Groups []LocalHAGroup `mapstructure:"groups"`
+}
+
+// Default fencing/handoff settings mirroring scripts/failover.sh.
+const (
+	DefaultFencingKey   = "fencing/active-cluster"
+	DefaultNeutralToken = "__switching__"
+)
+
 // Config is the top-level platform configuration.
 type Config struct {
 	// Addr is the HTTP listen address, e.g. ":8080".
@@ -66,6 +95,10 @@ type Config struct {
 
 	Auth    AuthConfig    `mapstructure:"auth"`
 	Cluster ClusterConfig `mapstructure:"cluster"`
+
+	// HA declares decentralized primary/standby groups this instance participates
+	// in (design failover-decentralized). Empty => failover UI disabled.
+	HA HAConfig `mapstructure:"ha"`
 }
 
 // Load reads configuration from env vars (prefix FKO_) and an optional file.
@@ -119,7 +152,31 @@ func Load(configFile string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	// Apply per-HA-group defaults (mirror scripts/failover.sh; handoff key
+	// defaults to fencing/handoff/<group>).
+	for i := range cfg.HA.Groups {
+		g := &cfg.HA.Groups[i]
+		if g.FencingKey == "" {
+			g.FencingKey = DefaultFencingKey
+		}
+		if g.NeutralToken == "" {
+			g.NeutralToken = DefaultNeutralToken
+		}
+		if g.HandoffKey == "" {
+			g.HandoffKey = "fencing/handoff/" + g.Name
+		}
+	}
 	return &cfg, nil
+}
+
+// HAGroupByName returns a declared local HA group by name.
+func (c *Config) HAGroupByName(name string) (LocalHAGroup, bool) {
+	for _, g := range c.HA.Groups {
+		if g.Name == name {
+			return g, true
+		}
+	}
+	return LocalHAGroup{}, false
 }
 
 // DeploymentName maps a short job name to its FlinkDeployment resource name.

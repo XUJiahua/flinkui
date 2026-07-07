@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestDeploymentNameAndJobName(t *testing.T) {
 	tests := []struct {
@@ -65,5 +69,59 @@ func TestLoadDefaultsAndEnvBinding(t *testing.T) {
 	}
 	if !cfg.Cluster.S3.Insecure {
 		t.Errorf("S3.Insecure = false, want true")
+	}
+}
+
+func TestLoadHAGroups(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	yaml := `
+cluster:
+  name: cluster-a
+  namespace: flink-jobs
+ha:
+  groups:
+    - name: orders
+      namespace: flink-jobs
+      deployment: flink-sql-job-orders
+      cluster_id: cluster-a
+      peer_cluster_id: cluster-b
+    - name: custom
+      namespace: ns
+      deployment: d
+      cluster_id: a
+      peer_cluster_id: b
+      fencing_key: fencing/custom
+      neutral_token: "__x__"
+      handoff_key: h/custom
+`
+	if err := os.WriteFile(file, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(file)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.HA.Groups) != 2 {
+		t.Fatalf("groups = %d, want 2", len(cfg.HA.Groups))
+	}
+	g, ok := cfg.HAGroupByName("orders")
+	if !ok {
+		t.Fatal("orders not found")
+	}
+	// defaults applied
+	if g.FencingKey != DefaultFencingKey || g.NeutralToken != DefaultNeutralToken {
+		t.Errorf("defaults not applied: %+v", g)
+	}
+	if g.HandoffKey != "fencing/handoff/orders" {
+		t.Errorf("handoff default = %q", g.HandoffKey)
+	}
+	if g.ClusterID != "cluster-a" || g.PeerClusterID != "cluster-b" || g.Deployment != "flink-sql-job-orders" {
+		t.Errorf("orders fields wrong: %+v", g)
+	}
+	// explicit overrides kept
+	g2, _ := cfg.HAGroupByName("custom")
+	if g2.FencingKey != "fencing/custom" || g2.NeutralToken != "__x__" || g2.HandoffKey != "h/custom" {
+		t.Errorf("overrides lost: %+v", g2)
 	}
 }
