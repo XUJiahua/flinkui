@@ -8,7 +8,9 @@ import { useAuthGuard } from "@/lib/use-auth";
 import { Header } from "@/components/header";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SwitchWizard } from "@/components/switch-wizard";
 import { cn } from "@/lib/utils";
 import type { GroupView, SideView } from "@/lib/types";
 
@@ -58,6 +60,7 @@ export default function HAPage() {
 }
 
 function GroupCard({ group }: { group: GroupView }) {
+  const [wizard, setWizard] = React.useState<null | "failover" | "failback">(null);
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -65,9 +68,17 @@ function GroupCard({ group }: { group: GroupView }) {
           {group.name}
           <FencingBadge group={group} />
         </CardTitle>
-        <span className="text-sm text-muted-foreground">
-          active: <span className="font-medium text-foreground">{group.activeSide}</span>
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground">
+            active: <span className="font-medium text-foreground">{group.activeSide}</span>
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setWizard("failover")}>
+            Failover →
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setWizard("failback")}>
+            ← Failback
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {group.splitBrain && (
@@ -91,6 +102,10 @@ function GroupCard({ group }: { group: GroupView }) {
           <SideCard side={group.standby} active={group.activeSide === "standby"} />
         </div>
       </CardContent>
+
+      {wizard && (
+        <SwitchWizard open group={group} direction={wizard} onClose={() => setWizard(null)} />
+      )}
     </Card>
   );
 }

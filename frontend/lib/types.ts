@@ -99,3 +99,21 @@ export interface GroupView {
   splitBrain: boolean;
   warning?: string;
 }
+
+export interface StepState {
+  name: string;
+  status: "pending" | "running" | "done" | "failed";
+  message?: string;
+}
+
+export interface SwitchTask {
+  id: string;
+  group: string;
+  direction: "failover" | "failback";
+  status: "running" | "succeeded" | "failed";
+  steps: StepState[];
+  recoveryPoint: { path: string; kind: string };
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
