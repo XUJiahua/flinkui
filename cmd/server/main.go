@@ -17,9 +17,18 @@ import (
 	"github.com/fko-demo/flinkui/web"
 )
 
+// version is set at build time via -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func main() {
 	configFile := flag.String("config", "", "path to config file (optional; env FKO_* also supported)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		log.Printf("flinkui %s", version)
+		return
+	}
 
 	cfg, err := config.Load(*configFile)
 	if err != nil {
@@ -63,8 +72,8 @@ func main() {
 	}
 
 	srv := api.New(cfg, svc, st, a, staticFS)
-	log.Printf("Flink job console listening on %s (cluster=%s namespace=%s)",
-		cfg.Addr, cfg.Cluster.Name, cfg.Cluster.Namespace)
+	log.Printf("Flink job console %s listening on %s (cluster=%s namespace=%s)",
+		version, cfg.Addr, cfg.Cluster.Name, cfg.Cluster.Namespace)
 	if err := srv.Run(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
