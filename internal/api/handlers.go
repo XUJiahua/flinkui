@@ -130,3 +130,14 @@ func (h *Handlers) clusterInfo(c *gin.Context) {
 		"s3Configured": h.store != nil,
 	})
 }
+
+// healthz is a liveness probe: the process is up and serving.
+func (h *Handlers) healthz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// readyz is a readiness probe: the process can serve requests. It does not call
+// the cluster (a transient API blip should not remove the console from service).
+func (h *Handlers) readyz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ready"})
+}

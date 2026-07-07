@@ -26,6 +26,10 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, a *auth.Auth, 
 	h := &Handlers{svc: svc, store: st, cfg: cfg}
 	hub := newStatusHub(h, a, cfg.StatusPollSec)
 
+	// Public health endpoints (no auth) for liveness/readiness probes.
+	r.GET("/healthz", h.healthz)
+	r.GET("/readyz", h.readyz)
+
 	// Public auth endpoints.
 	r.POST("/api/login", a.Login)
 	r.POST("/api/logout", a.Logout)

@@ -33,9 +33,9 @@ type S3Config struct {
 	SecretKey string `mapstructure:"secret_key"`
 	Region    string `mapstructure:"region"`
 	PathStyle bool   `mapstructure:"path_style"`
-	UseSSL    bool   `mapstructure:"use_ssl"`
 	// Insecure skips TLS certificate verification, for internal MinIO endpoints
-	// that use a self-signed certificate.
+	// that use a self-signed certificate. (TLS on/off is determined by the
+	// endpoint URL scheme; there is no separate use_ssl toggle.)
 	Insecure bool `mapstructure:"insecure"`
 }
 
@@ -84,7 +84,6 @@ func Load(configFile string) (*Config, error) {
 	v.SetDefault("cluster.namespace", "flink-operator")
 	v.SetDefault("cluster.s3.region", "us-east-1")
 	v.SetDefault("cluster.s3.path_style", true)
-	v.SetDefault("cluster.s3.use_ssl", false)
 	v.SetDefault("auth.username", "admin")
 	v.SetDefault("auth.session_secret", "change-me-please")
 
@@ -102,7 +101,7 @@ func Load(configFile string) (*Config, error) {
 		"log_tail_lines", "status_poll_sec",
 		"cluster.name", "cluster.namespace", "cluster.kubeconfig", "cluster.context",
 		"cluster.s3.endpoint", "cluster.s3.bucket", "cluster.s3.access_key",
-		"cluster.s3.secret_key", "cluster.s3.region", "cluster.s3.path_style", "cluster.s3.use_ssl",
+		"cluster.s3.secret_key", "cluster.s3.region", "cluster.s3.path_style",
 		"cluster.s3.insecure",
 		"auth.username", "auth.password", "auth.session_secret",
 	} {

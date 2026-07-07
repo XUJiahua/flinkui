@@ -96,16 +96,16 @@ resources:
     cpu: 500m
     memory: 256Mi
 
-# Probes hit the static login page (always served, no auth required).
+# Probes hit the dedicated health endpoints (public, no auth).
 livenessProbe:
   httpGet:
-    path: /login.html
+    path: /healthz
     port: http
   initialDelaySeconds: 5
   periodSeconds: 20
 readinessProbe:
   httpGet:
-    path: /login.html
+    path: /readyz
     port: http
   initialDelaySeconds: 3
   periodSeconds: 10

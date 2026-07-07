@@ -89,12 +89,16 @@ func (a *Auth) Login(c *gin.Context) {
 	}
 	exp := time.Now().Add(sessionMaxAge).Unix()
 	token := a.sign(req.Username, exp)
+	// SameSite=Lax mitigates CSRF on the state-changing POST endpoints while
+	// keeping the same-origin SPA fully functional.
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(cookieName, token, int(sessionMaxAge.Seconds()), "/", "", false, true)
 	c.JSON(http.StatusOK, gin.H{"username": req.Username})
 }
 
 // Logout clears the session cookie.
 func (a *Auth) Logout(c *gin.Context) {
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(cookieName, "", -1, "/", "", false, true)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
