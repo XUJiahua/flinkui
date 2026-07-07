@@ -3,8 +3,10 @@
 // NEXT_PUBLIC_API_BASE to point at a running backend.
 import type {
   ClusterInfo,
+  HATask,
   JobDetail,
   JobSummary,
+  LocalView,
   LogComponent,
   Operation,
   RecoveryPoint,
@@ -57,9 +59,10 @@ export const api = {
   cluster: () => request<ClusterInfo>("/api/cluster"),
   listJobs: () => request<{ jobs: JobSummary[] }>("/api/jobs"),
   getJob: (name: string) => request<JobDetail>(`/api/jobs/${encodeURIComponent(name)}`),
-  logs: (name: string, tail = 200, component: LogComponent = "jobmanager") =>
+  logs: (name: string, tail = 200, component: LogComponent = "jobmanager", pod = "") =>
     request<{ logs: string }>(
-      `/api/jobs/${encodeURIComponent(name)}/logs?tail=${tail}&component=${component}`,
+      `/api/jobs/${encodeURIComponent(name)}/logs?tail=${tail}&component=${component}` +
+        (pod ? `&pod=${encodeURIComponent(pod)}` : ""),
     ),
   recoveryPoints: (name: string) =>
     request<{ recoveryPoints: RecoveryPoint[] }>(
@@ -88,7 +91,43 @@ export const api = {
   // Async operation status (savepoint / restart progress).
   getOperation: (id: string) =>
     request<Operation>(`/api/operations/${encodeURIComponent(id)}`),
+
+  // Decentralized HA.
+  listHA: () => request<{ groups: LocalView[] }>("/api/ha"),
+  getHA: (name: string) => request<LocalView>(`/api/ha/${encodeURIComponent(name)}`),
+  release: (name: string) =>
+    request<HATask>(`/api/ha/${encodeURIComponent(name)}/release`, {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    }),
+  promote: (name: string, force: boolean, ackDataLoss: boolean) =>
+    request<HATask>(`/api/ha/${encodeURIComponent(name)}/promote`, {
+      method: "POST",
+      body: JSON.stringify({ confirm: true, force, ackDataLoss }),
+    }),
+  getHATask: (id: string) => request<HATask>(`/api/ha-tasks/${encodeURIComponent(id)}`),
 };
+
+/** pollHATask polls a release/promote task until it finishes (or times out). */
+export async function pollHATask(
+  id: string,
+  onProgress?: (task: HATask) => void,
+  opts: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<HATask> {
+  const intervalMs = opts.intervalMs ?? 2000;
+  const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
+  const deadline = Date.now() + timeoutMs;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const task = await api.getHATask(id);
+    onProgress?.(task);
+    if (task.status !== "running") return task;
+    if (Date.now() > deadline) {
+      return { ...task, status: "failed", error: "polling timed out" };
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
 
 /** pollOperation polls an async operation until it finishes (or times out),
  *  invoking onProgress with each snapshot. Returns the terminal Operation. */

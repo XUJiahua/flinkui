@@ -75,3 +75,53 @@ export interface Operation {
   startedAt: string;
   finishedAt?: string;
 }
+
+// --- Decentralized HA (failover-decentralized) ---
+
+export interface FencingState {
+  token: string;
+  pointsTo: "self" | "peer" | "neutral" | "unset" | "unknown";
+  error?: string;
+}
+
+export interface HandoffRecord {
+  group: string;
+  activeClusterId: string;
+  epoch: number;
+  phase: "stable" | "released" | "promoting";
+  recoveryPoint: { path: string; kind: string };
+  releasedBy?: string;
+  updatedAt: string;
+}
+
+export interface LocalView {
+  name: string;
+  clusterId: string;
+  peerClusterId: string;
+  namespace: string;
+  deployment: string;
+  local: JobDetail | null;
+  fencing: FencingState;
+  handoff: HandoffRecord | null;
+  role: "active" | "standby" | "neutral" | "unknown";
+  warning?: string;
+}
+
+export interface HAStepState {
+  name: string;
+  status: "pending" | "running" | "done" | "failed";
+  message?: string;
+}
+
+export interface HATask {
+  id: string;
+  group: string;
+  op: "release" | "promote";
+  status: "running" | "succeeded" | "failed";
+  steps: HAStepState[];
+  recoveryPoint: { path: string; kind: string };
+  epoch: number;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
