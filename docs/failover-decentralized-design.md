@@ -1,0 +1,142 @@
+# 去中心主从切换设计（Decentralized Failover）
+
+> 面向「跨集群 k8s 互相连不通」的灾难/分区场景：两侧 flinkui 各自**只操作本地集群**，
+> 通过**共享 S3**（fencing token + 交接记录）协调，运维在两边平台上各做一个本地半操作
+> 完成切换。对应 MVP 设计 §8 P1 的演进（peer 模型）。
+
+## 1. 为什么需要它
+
+集中式 failover（一个平台持有两侧 kubeconfig、一个流程里既停源又起目标）在**对端 k8s
+不可达**时必然做不完。去中心模式把一次切换拆成两个**本地半操作**，不依赖任何跨集群
+k8s 调用：
+
+- **Release（让位）**：源侧运维在**源侧 flinkui** 上执行——停本地作业、本地确认停稳、
+  释放 token。
+- **Promote（接管）**：目标侧运维在**目标侧 flinkui** 上执行——占用 token、从恢复点拉起
+  本地作业。
+
+## 2. 三条支柱
+
+1. **本地只动自己**：每侧 flinkui 用本地 in-cluster SA，只操作本集群的 FlinkDeployment。
+   天然分区容错。
+2. **共享 S3 是唯一协调平面**：fencing token（谁可运行）+ 交接记录（handoff：epoch /
+   恢复点 / 阶段 / 让位者）。前提：跨集群 k8s 断了，但两侧到共享对象存储仍可达。
+3. **防"双跑"的硬保证是作业 Pod 的 fencing initContainer**：Pod 启动校验
+   `token == 自身 clusterId`，不符拒启。**与平台连通性无关**。
+
+## 3. 共享 S3 上的两个对象
+
+- **Fencing token**（沿用现状，key 默认 `fencing/active-cluster`）：内容为当前活跃
+  `clusterId`，或中性值 `__switching__`（两侧都被 fence）。
+- **交接记录**（新，JSON，key 默认 `fencing/handoff/<group>`）：
+  ```json
+  {
+    "group": "orders",
+    "activeClusterId": "cluster-a",
+    "epoch": 5,
+    "phase": "stable|released|promoting",
+    "recoveryPoint": { "path": "s3://...", "kind": "savepoint|checkpoint|none" },
+    "releasedBy": "cluster-a",
+    "updatedAt": "2026-07-07T09:00:00Z"
+  }
+  ```
+  `epoch` 单调递增，用于防旧主 flapping 抢回、以及并发 Promote 竞态判定。
+
+## 4. 两个本地半操作（状态机）
+
+**Release（我在跑 → 让位），全在本地：**
+```
+SAVEPOINT(本地健康则触发, 写 handoff.recoveryPoint)
+  → SUSPEND_LOCAL → WAIT_LOCAL_STOPPED(本地轮询 JM Pod 归零)
+  → TOKEN_NEUTRAL(token=__switching__)
+  → WRITE_HANDOFF(phase=released, releasedBy=me, epoch 不变)
+```
+
+**Promote（接管 → 我来跑），全在本地：**
+```
+READ_HANDOFF
+  → PICK_RECOVERY_POINT(handoff.recoveryPoint 优先; 否则 S3 最新 checkpoint)
+  → TOKEN_TO_SELF(token=myClusterId, epoch=handoff.epoch+1, phase=stable)
+  → START_LOCAL(state=running + initialSavepointPath + savepointRedeployNonce)
+  → VERIFY_LOCAL(本地轮询到 RUNNING/STABLE, 尽力而为)
+```
+
+计划切换：源侧先 Release → 目标侧再 Promote（看着同一份 S3 交接记录协作）。
+
+## 5. 灾难 Promote 与硬限制（必须坦白）
+
+若源侧真的挂了/彻底不可达：目标侧 **Promote(force)**，从**最新 checkpoint** 恢复，
+运维必须**显式确认数据丢失**（`ackDataLoss`）。
+
+**硬限制**：现有 fencing 是**启动期**校验，能挡住源侧之后重启的 Pod，但**杀不掉源侧此刻
+仍在跑的 Pod**。当「源侧只是与目标/运维分区、其实还活着还在写」时，force Promote 会导致
+**运行期双跑**。根治需把 fencing 升级为**运行期自我隔离**：给作业加 sidecar/watcher，
+周期读 token，`token != 自身` 则自杀（软 STONITH）。本期不做该 sidecar，仅在文档标注为
+强安全增强项；force Promote 以人工确认 + 单调 epoch 作为当前防线。
+
+## 6. 竞态与一致性
+
+- **token / handoff 写入**：优先用 S3 条件写（ETag `If-Match` / `If-None-Match`）保证
+  串行；退化为读-改-写 + epoch 比较。两侧同时 Promote 时 epoch 高者胜，低者的 Pod 因
+  token 不符被 fence。
+- **共享 S3 必须两侧可达且强一致**（现代 S3/MinIO 的 Put 强一致）。S3 也不可达时不属于
+  本模式能解决的范畴（纯人工）。
+
+## 7. 配置（每侧实例声明自己的本地侧）
+
+```yaml
+cluster:            # 本地集群（in-cluster SA），其 s3 即共享存储
+  name: cluster-a
+  namespace: flink-jobs
+  kubeconfig: ""
+  s3: { endpoint: "https://minio...:9000", bucket: flink, access_key: ..., secret_key: ..., path_style: true, insecure: true }
+
+ha:
+  groups:
+    - name: orders
+      namespace: flink-jobs                # 本地 namespace
+      deployment: flink-sql-job-orders      # 本地 deployment
+      cluster_id: cluster-a                 # 我这侧的 clusterId（token 写这个值）
+      peer_cluster_id: cluster-b            # 对端（仅展示 + 交接语义）
+      fencing_key: fencing/active-cluster   # 可选，默认
+      neutral_token: __switching__          # 可选，默认
+      handoff_key: fencing/handoff/orders   # 可选，默认 fencing/handoff/<group>
+```
+对端那侧的 flinkui 用镜像对称的配置（cluster_id=cluster-b，local 指向它自己的 deployment）。
+
+## 8. API（本地）
+
+```
+GET  /api/ha                     # 本地视角的所有组
+GET  /api/ha/:name               # 单组本地视角
+POST /api/ha/:name/release       # {confirm:true} 让位（本地）
+POST /api/ha/:name/promote       # {confirm:true, force?:bool, ackDataLoss?:bool} 接管（本地）
+GET  /api/ha-tasks/:id           # 轮询 release/promote 进度
+```
+
+LocalView：本地作业状态（复用 flink.Get）+ 共享 token（pointsTo self|peer|neutral|unset|
+unknown）+ 交接记录 + 角色（active|standby|neutral|unknown）+ 本地不一致告警
+（如 token=self 但本地没在跑 / token=peer 但本地在跑应停）。**对端状态标注为"未观测
+（跨集群）"**。
+
+## 9. 前端 `/ha`
+
+每组一张卡：**本地侧**状态（StatusBadge）+ 共享 token 指向 + 交接记录（epoch/phase/
+recoveryPoint）+ **对端(未观测)** 占位；按角色给 **Release**（本地在跑时）/ **Promote**
+（force + 数据丢失确认）按钮 + 五步进度（复用 async task 轮询）。
+
+## 10. 复用与新增
+
+- **复用**（节选自集中式分支）：`store` 的 S3 client 构造、fencing token 读写思路、
+  fencing/status 分类逻辑、async task/进度模式、`/ha` 页面骨架与 UI 组件。
+- **新增**：交接记录（handoff）读写 + epoch、去中心 `LocalView`、`Release`/`Promote`
+  本地状态机、本地 API、去中心 `/ha` 交互。
+- **不做（本期）**：集中式 `do_switch`（连不上对端时用不了）、运行期自我隔离 sidecar、
+  自动故障检测/自动切换。
+
+## 11. 风险 / 备注
+
+- 启动期 fencing 不杀在跑 Pod → force Promote 有运行期双跑风险（人工确认 + epoch 缓解；
+  运行期 sidecar 为根治项）。
+- 交接任务 in-memory（重启丢半途；视图可从 S3 token + handoff + 本地状态重建）。
+- 共享 S3 是单点协调平面，必须两侧可达且强一致。
