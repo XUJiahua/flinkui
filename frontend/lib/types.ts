@@ -72,3 +72,48 @@ export interface Operation {
   startedAt: string;
   finishedAt?: string;
 }
+
+// --- Failover / HA groups ---
+
+export interface FencingState {
+  token: string;
+  pointsTo: "primary" | "standby" | "neutral" | "unset" | "unknown";
+  error?: string;
+}
+
+export interface SideView {
+  role: "primary" | "standby";
+  cluster: string;
+  namespace: string;
+  deployment: string;
+  clusterId: string;
+  detail: JobDetail | null;
+}
+
+export interface GroupView {
+  name: string;
+  primary: SideView;
+  standby: SideView;
+  fencing: FencingState;
+  activeSide: "primary" | "standby" | "none" | "unknown";
+  splitBrain: boolean;
+  warning?: string;
+}
+
+export interface StepState {
+  name: string;
+  status: "pending" | "running" | "done" | "failed";
+  message?: string;
+}
+
+export interface SwitchTask {
+  id: string;
+  group: string;
+  direction: "failover" | "failback";
+  status: "running" | "succeeded" | "failed";
+  steps: StepState[];
+  recoveryPoint: { path: string; kind: string };
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+}

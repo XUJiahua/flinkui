@@ -47,11 +47,20 @@ func httpClient(insecure bool) *http.Client {
 // New builds a Store. It is intended to be called only when S3 is configured
 // (endpoint or credentials present).
 func New(ctx context.Context, cfg config.S3Config) (*Store, error) {
+	client, err := buildClient(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{client: client, defaultBucket: cfg.Bucket}, nil
+}
+
+// buildClient constructs an S3 client for an S3/MinIO endpoint (path-style,
+// optional insecure TLS). Shared by the recovery-point Store and FencingStore.
+func buildClient(ctx context.Context, cfg config.S3Config) (*s3.Client, error) {
 	region := cfg.Region
 	if region == "" {
 		region = "us-east-1"
 	}
-
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(
@@ -62,14 +71,12 @@ func New(ctx context.Context, cfg config.S3Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
-
-	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 		}
 		o.UsePathStyle = cfg.PathStyle
-	})
-	return &Store{client: client, defaultBucket: cfg.Bucket}, nil
+	}), nil
 }
 
 // ListRecoveryPoints lists savepoints and checkpoints for a job, newest first.

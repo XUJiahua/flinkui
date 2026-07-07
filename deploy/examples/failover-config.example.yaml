@@ -1,0 +1,51 @@
+# Example config enabling the failover platform (design failover P1).
+# Run with:  ./bin/flinkui -config failover-config.example.yaml
+#
+# Two forms are supported:
+#   1) cross-cluster    — primary/standby on different clusters (mount both kubeconfigs)
+#   2) single-cluster   — primary/standby in two namespaces of ONE cluster (no extra creds)
+
+addr: ":8080"
+
+auth:
+  username: admin
+  password: "change-me"           # or use a Secret in the Helm chart
+  session_secret: "change-me-too" # openssl rand -hex 16
+
+# The MVP single-cluster dashboard still needs a cluster block.
+cluster:
+  name: local
+  namespace: flink-jobs
+  kubeconfig: ""                   # empty => in-cluster ServiceAccount
+  s3:
+    endpoint: "https://minio.flink-operator:9000"  # S3 API port, not the console
+    bucket: flink
+    access_key: minioadmin
+    secret_key: minioadmin
+    path_style: true
+    insecure: true                 # self-signed MinIO cert
+
+# Named cluster pool. Each side of an HA group references one of these.
+clusters:
+  cluster-a:
+    kubeconfig: /etc/flinkui/kube/cluster-a.yaml   # empty for the local in-cluster one
+    s3: { endpoint: "https://minio.flink-operator:9000", bucket: flink, access_key: minioadmin, secret_key: minioadmin, path_style: true, insecure: true }
+  cluster-b:
+    kubeconfig: /etc/flinkui/kube/cluster-b.yaml
+    s3: { endpoint: "https://minio.flink-operator:9000", bucket: flink, access_key: minioadmin, secret_key: minioadmin, path_style: true, insecure: true }
+
+# Static primary/standby declarations.
+ha_groups:
+  # Cross-cluster form.
+  - name: orders-cross-cluster
+    s3_cluster: cluster-a          # both sides share this S3 for fencing + recovery points
+    fencing_key: fencing/active-cluster   # optional (this is the default)
+    neutral_token: __switching__          # optional (this is the default)
+    primary: { cluster: cluster-a, namespace: flink-jobs, deployment: flink-sql-job-orders, cluster_id: cluster-a }
+    standby: { cluster: cluster-b, namespace: flink-jobs, deployment: flink-sql-job-orders, cluster_id: cluster-b }
+
+  # Single-cluster, two-namespace form (no cross-cluster credentials needed).
+  - name: orders-two-ns
+    s3_cluster: local
+    primary: { cluster: local, namespace: flink-primary, deployment: flink-sql-job-orders, cluster_id: primary }
+    standby: { cluster: local, namespace: flink-standby, deployment: flink-sql-job-orders, cluster_id: standby }

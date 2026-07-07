@@ -3,10 +3,12 @@
 // NEXT_PUBLIC_API_BASE to point at a running backend.
 import type {
   ClusterInfo,
+  GroupView,
   JobDetail,
   JobSummary,
   Operation,
   RecoveryPoint,
+  SwitchTask,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
@@ -85,6 +87,27 @@ export const api = {
   // Async operation status (savepoint / restart progress).
   getOperation: (id: string) =>
     request<Operation>(`/api/operations/${encodeURIComponent(id)}`),
+
+  // Failover / HA groups.
+  listHAGroups: () => request<{ groups: GroupView[] }>("/api/ha-groups"),
+  getHAGroup: (name: string) =>
+    request<GroupView>(`/api/ha-groups/${encodeURIComponent(name)}`),
+  haRecoveryPoints: (name: string) =>
+    request<{ recoveryPoints: RecoveryPoint[] }>(
+      `/api/ha-groups/${encodeURIComponent(name)}/recovery-points`,
+    ),
+  failover: (name: string) =>
+    request<SwitchTask>(`/api/ha-groups/${encodeURIComponent(name)}/failover`, {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    }),
+  failback: (name: string) =>
+    request<SwitchTask>(`/api/ha-groups/${encodeURIComponent(name)}/failback`, {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    }),
+  getSwitchTask: (id: string) =>
+    request<SwitchTask>(`/api/switch-tasks/${encodeURIComponent(id)}`),
 };
 
 /** pollOperation polls an async operation until it finishes (or times out),
@@ -104,6 +127,27 @@ export async function pollOperation(
     if (op.status !== "running") return op;
     if (Date.now() > deadline) {
       return { ...op, status: "failed", error: "polling timed out" };
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
+/** pollSwitchTask polls a failover/failback task until it finishes (or times out). */
+export async function pollSwitchTask(
+  id: string,
+  onProgress?: (task: SwitchTask) => void,
+  opts: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<SwitchTask> {
+  const intervalMs = opts.intervalMs ?? 2000;
+  const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
+  const deadline = Date.now() + timeoutMs;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const task = await api.getSwitchTask(id);
+    onProgress?.(task);
+    if (task.status !== "running") return task;
+    if (Date.now() > deadline) {
+      return { ...task, status: "failed", error: "polling timed out" };
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
