@@ -36,8 +36,13 @@ type KubeAccessor struct {
 
 	// Informer-backed cache for FlinkDeployments (design §3.3: watch/informer
 	// instead of polling). Optional — falls back to live List until synced.
-	factory     dynamicinformer.DynamicSharedInformerFactory
-	fdInformer  informers.GenericInformer
+	factory    dynamicinformer.DynamicSharedInformerFactory
+	fdInformer informers.GenericInformer
+	// stopCh keeps the informer's watch goroutines alive for the whole process
+	// lifetime. It must be independent of the (bounded) context used to wait for
+	// the initial cache sync — otherwise cancelling that context would stop the
+	// watch and freeze the cache at its first snapshot.
+	stopCh chan struct{}
 }
 
 // NewKubeAccessor builds an accessor. If kubeconfig is empty, in-cluster config
@@ -66,19 +71,30 @@ func NewKubeAccessor(name, namespace, kubeconfig, kubeContext string) (*KubeAcce
 		dynClient:  dyn,
 		factory:    factory,
 		fdInformer: fdInformer,
+		stopCh:     make(chan struct{}),
 	}, nil
 }
 
-// Start launches the informer(s) and blocks until their caches sync (or ctx is
-// cancelled). Implements the optional cluster.Starter interface.
+// Start launches the informer(s) using a process-lifetime stop channel and
+// blocks until their caches sync or the (bounded) ctx is cancelled. The watch
+// goroutines keep running after Start returns — the ctx only bounds the initial
+// sync wait, not the informer itself. Implements the optional cluster.Starter
+// interface.
 func (k *KubeAccessor) Start(ctx context.Context) error {
-	k.factory.Start(ctx.Done())
+	k.factory.Start(k.stopCh)
 	for gvr, ok := range k.factory.WaitForCacheSync(ctx.Done()) {
 		if !ok {
 			return fmt.Errorf("informer cache for %s failed to sync", gvr.Resource)
 		}
 	}
 	return nil
+}
+
+// Stop terminates the informer's watch goroutines. Safe to call once.
+func (k *KubeAccessor) Stop() {
+	if k.stopCh != nil {
+		close(k.stopCh)
+	}
 }
 
 // CachedListFlinkDeployments returns FlinkDeployments from the informer cache.
