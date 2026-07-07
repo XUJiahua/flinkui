@@ -161,6 +161,51 @@ In-cluster the backend uses the mounted ServiceAccount (leave
 `FKO_CLUSTER_KUBECONFIG` unset) and can reach the JobManager REST service and
 S3 directly.
 
+### Helm chart
+
+A Helm chart is provided at [`deploy/helm/flinkui`](deploy/helm/flinkui). It
+creates the ServiceAccount + minimal RBAC, Deployment, Service, and the auth /
+S3 Secrets. The RBAC (Role/RoleBinding) is created in the namespace that holds
+the FlinkDeployments (`config.targetNamespace`), which may differ from the
+release namespace.
+
+```bash
+# Manage jobs in namespace "flink-jobs", enable the S3 rollback selector.
+helm upgrade --install flinkui deploy/helm/flinkui \
+  -n flink-jobs --create-namespace \
+  --set image.tag=0.1.0 \
+  --set config.clusterName=prod \
+  --set config.targetNamespace=flink-jobs \
+  --set auth.username=admin \
+  --set auth.password='change-me' \
+  --set auth.sessionSecret="$(openssl rand -hex 16)" \
+  --set s3.enabled=true \
+  --set s3.endpoint='https://minio.flink-operator:9000' \
+  --set s3.insecure=true \
+  --set s3.accessKey=minioadmin \
+  --set s3.secretKey=minioadmin
+
+# then reach the console:
+kubectl -n flink-jobs port-forward svc/flinkui 8080:80   # http://localhost:8080
+```
+
+Key values (see [`values.yaml`](deploy/helm/flinkui/values.yaml) for all):
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `image.repository` / `image.tag` | `docker.io/johnxu1989/flinkui` / _appVersion_ | image coordinates |
+| `config.targetNamespace` | _(release ns)_ | namespace holding FlinkDeployments (RBAC target) |
+| `config.clusterName` | `in-cluster` | display name |
+| `auth.password` / `auth.sessionSecret` | _(empty)_ | **required** unless `auth.existingSecret` is set |
+| `auth.existingSecret` | _(empty)_ | use a pre-created Secret (keys: username, password, session-secret) |
+| `s3.enabled` | `false` | enable the rollback recovery-point selector |
+| `s3.endpoint` / `s3.insecure` | _(empty)_ / `false` | MinIO S3 **API** endpoint; skip TLS for self-signed |
+| `s3.existingSecret` | _(empty)_ | pre-created Secret (keys: access-key, secret-key) |
+| `service.type` / `ingress.enabled` | `ClusterIP` / `false` | exposure |
+
+An example values file for the sample cluster is at
+[`deploy/helm/flinkui/values-example.yaml`](deploy/helm/flinkui/values-example.yaml).
+
 ## Test
 
 ```bash

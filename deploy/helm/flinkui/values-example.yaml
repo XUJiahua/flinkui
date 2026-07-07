@@ -1,0 +1,34 @@
+# Example values for the sample k3s cluster (namespace flink-jobs + MinIO).
+# Install:
+#   helm upgrade --install flinkui deploy/helm/flinkui \
+#     -n flink-jobs --create-namespace \
+#     -f deploy/helm/flinkui/values-example.yaml \
+#     --set auth.password="change-me" \
+#     --set auth.sessionSecret="$(openssl rand -hex 16)" \
+#     --set s3.accessKey=minioadmin --set s3.secretKey=minioadmin
+
+image:
+  repository: docker.io/johnxu1989/flinkui
+  tag: "0.1.0"
+
+config:
+  clusterName: "k3s"
+  # FlinkDeployments live in flink-jobs; RBAC is created there.
+  targetNamespace: "flink-jobs"
+
+auth:
+  username: "admin"
+  # password / sessionSecret provided via --set or an existingSecret.
+
+s3:
+  enabled: true
+  # In-cluster S3 API service (NOT the console port). Reached directly in-cluster.
+  endpoint: "https://minio.flink-operator:9000"
+  region: "us-east-1"
+  pathStyle: true
+  insecure: true # self-signed MinIO cert
+  # accessKey / secretKey via --set or an existingSecret.
+
+service:
+  type: ClusterIP
+  port: 80

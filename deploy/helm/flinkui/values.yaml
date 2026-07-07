@@ -1,0 +1,133 @@
+# Default values for the flinkui chart.
+
+replicaCount: 1
+
+image:
+  repository: docker.io/johnxu1989/flinkui
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Console / cluster configuration (maps to FKO_* env vars). --------------
+config:
+  # HTTP listen address inside the container.
+  addr: ":8080"
+  # Display name for the cluster.
+  clusterName: "in-cluster"
+  # Namespace that holds the FlinkDeployment resources the console manages.
+  # RBAC (Role/RoleBinding) is created here so the console can act on those jobs.
+  # Defaults to the release namespace when empty.
+  targetNamespace: ""
+  # FlinkDeployment naming convention prefix (deployment = prefix + job name).
+  deploymentPrefix: "flink-sql-job-"
+  savepointTimeoutSec: 120
+  stopTimeoutSec: 120
+  logTailLines: 200
+  statusPollSec: 5
+
+# -- Authentication (required). --------------------------------------------
+# The console can mutate cluster workloads and must not run unauthenticated.
+auth:
+  username: "admin"
+  # Set password + sessionSecret to create a Secret, OR reference an existing one.
+  password: ""
+  # Cookie signing secret. Strongly recommended to override (e.g. openssl rand -hex 16).
+  sessionSecret: ""
+  # Use an existing Secret instead of creating one. It must contain keys:
+  #   username, password, session-secret
+  existingSecret: ""
+
+# -- S3 / MinIO for the rollback recovery-point selector (optional). --------
+s3:
+  enabled: false
+  # Point at the MinIO S3 *API* port (usually 9000), not the console port.
+  endpoint: ""
+  # Optional fallback bucket; recovery-point paths are otherwise read from each
+  # deployment's state.savepoints.dir / state.checkpoints.dir.
+  bucket: ""
+  region: "us-east-1"
+  pathStyle: true
+  # Skip TLS verification for internal MinIO with a self-signed certificate.
+  insecure: false
+  accessKey: ""
+  secretKey: ""
+  # Use an existing Secret with keys: access-key, secret-key
+  existingSecret: ""
+
+# -- Extra raw FKO_* env vars (advanced / escape hatch). --------------------
+extraEnv: []
+#  - name: FKO_SOMETHING
+#    value: "x"
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  # Create the Role + RoleBinding granting the minimal permissions
+  # (flinkdeployments get/list/watch/patch, pods, pods/log, pods/exec, events).
+  create: true
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: flinkui.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Probes hit the static login page (always served, no auth required).
+livenessProbe:
+  httpGet:
+    path: /login.html
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 20
+readinessProbe:
+  httpGet:
+    path: /login.html
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 10
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  # distroless :nonroot uses UID/GID 65532; a numeric UID is required so the
+  # kubelet can verify runAsNonRoot.
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

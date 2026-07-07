@@ -1,0 +1,45 @@
+{{- if .Values.rbac.create -}}
+{{- $targetNs := include "flinkui.targetNamespace" . -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "flinkui.fullname" . }}
+  namespace: {{ $targetNs }}
+  labels:
+    {{- include "flinkui.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["flink.apache.org"]
+    resources: ["flinkdeployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "flinkui.fullname" . }}
+  namespace: {{ $targetNs }}
+  labels:
+    {{- include "flinkui.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "flinkui.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "flinkui.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

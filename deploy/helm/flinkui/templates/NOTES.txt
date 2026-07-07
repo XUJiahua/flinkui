@@ -1,0 +1,32 @@
+Flink Job Console ({{ .Chart.Name }}-{{ .Chart.Version }}) installed.
+
+Managing FlinkDeployments in namespace: {{ include "flinkui.targetNamespace" . }}
+
+Access the console:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.service.type "ClusterIP" }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "flinkui.fullname" . }} 8080:{{ .Values.service.port }}
+  # then open http://localhost:8080
+{{- else if eq .Values.service.type "NodePort" }}
+  export NODE_PORT=$(kubectl -n {{ .Release.Namespace }} get svc {{ include "flinkui.fullname" . }} -o jsonpath='{.spec.ports[0].nodePort}')
+  export NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[0].address}')
+  echo "http://$NODE_IP:$NODE_PORT"
+{{- else if eq .Values.service.type "LoadBalancer" }}
+  kubectl -n {{ .Release.Namespace }} get svc {{ include "flinkui.fullname" . }} -w
+{{- end }}
+
+Login user: {{ .Values.auth.username }}
+{{- if .Values.auth.existingSecret }}
+Password: from existing secret "{{ .Values.auth.existingSecret }}".
+{{- else }}
+Password: as set in auth.password.
+{{- end }}
+
+{{- if not .Values.s3.enabled }}
+
+NOTE: S3 is disabled — the rollback recovery-point selector will be unavailable.
+      Enable it with --set s3.enabled=true and the S3 connection values.
+{{- end }}

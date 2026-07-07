@@ -1,0 +1,131 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flinkui.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "flinkui.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "flinkui.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll pods when the auth/S3 secrets change.
+        checksum/config: {{ include (print $.Template.BasePath "/secret-auth.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "flinkui.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "flinkui.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: flinkui
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # In-cluster: no kubeconfig => uses the mounted ServiceAccount.
+            - name: FKO_ADDR
+              value: {{ .Values.config.addr | quote }}
+            - name: FKO_CLUSTER_NAME
+              value: {{ .Values.config.clusterName | quote }}
+            - name: FKO_CLUSTER_NAMESPACE
+              value: {{ include "flinkui.targetNamespace" . | quote }}
+            - name: FKO_DEPLOYMENT_PREFIX
+              value: {{ .Values.config.deploymentPrefix | quote }}
+            - name: FKO_SAVEPOINT_TIMEOUT_SEC
+              value: {{ .Values.config.savepointTimeoutSec | quote }}
+            - name: FKO_STOP_TIMEOUT_SEC
+              value: {{ .Values.config.stopTimeoutSec | quote }}
+            - name: FKO_LOG_TAIL_LINES
+              value: {{ .Values.config.logTailLines | quote }}
+            - name: FKO_STATUS_POLL_SEC
+              value: {{ .Values.config.statusPollSec | quote }}
+            # Auth (from Secret).
+            - name: FKO_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flinkui.authSecretName" . }}
+                  key: username
+            - name: FKO_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flinkui.authSecretName" . }}
+                  key: password
+            - name: FKO_AUTH_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flinkui.authSecretName" . }}
+                  key: session-secret
+            {{- if .Values.s3.enabled }}
+            # S3 / MinIO (rollback recovery-point selector).
+            - name: FKO_CLUSTER_S3_ENDPOINT
+              value: {{ .Values.s3.endpoint | quote }}
+            - name: FKO_CLUSTER_S3_BUCKET
+              value: {{ .Values.s3.bucket | quote }}
+            - name: FKO_CLUSTER_S3_REGION
+              value: {{ .Values.s3.region | quote }}
+            - name: FKO_CLUSTER_S3_PATH_STYLE
+              value: {{ .Values.s3.pathStyle | quote }}
+            - name: FKO_CLUSTER_S3_INSECURE
+              value: {{ .Values.s3.insecure | quote }}
+            - name: FKO_CLUSTER_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flinkui.s3SecretName" . }}
+                  key: access-key
+            - name: FKO_CLUSTER_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flinkui.s3SecretName" . }}
+                  key: secret-key
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
