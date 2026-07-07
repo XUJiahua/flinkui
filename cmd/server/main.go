@@ -7,6 +7,7 @@ import (
 	"flag"
 	"io/fs"
 	"log"
+	"time"
 
 	"github.com/fko-demo/flinkui/internal/api"
 	"github.com/fko-demo/flinkui/internal/auth"
@@ -36,7 +37,8 @@ func main() {
 	}
 
 	// Cluster accessor (in-cluster if kubeconfig empty; else kubeconfig).
-	acc, err := cluster.NewKubeAccessor(
+	var acc cluster.ClusterAccessor
+	kubeAcc, err := cluster.NewKubeAccessor(
 		cfg.Cluster.Name,
 		cfg.Cluster.Namespace,
 		cfg.Cluster.Kubeconfig,
@@ -45,8 +47,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("init cluster accessor: %v", err)
 	}
+	acc = kubeAcc
 
 	svc := flink.NewService(acc, cfg)
+
+	// Start informer-backed caching if the accessor supports it (design §3.3).
+	// Best-effort: on failure we log and fall back to live API listing.
+	if starter, ok := acc.(cluster.Starter); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := starter.Start(ctx); err != nil {
+			log.Printf("warning: informer cache sync failed, using live API listing: %v", err)
+		} else {
+			log.Printf("informer cache synced for FlinkDeployments")
+		}
+		cancel()
+	}
 
 	// S3 store is optional; log and continue if unconfigured.
 	var st *store.Store

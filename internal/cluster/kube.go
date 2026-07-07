@@ -11,8 +11,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -30,6 +33,11 @@ type KubeAccessor struct {
 	restCfg   *rest.Config
 	clientset *kubernetes.Clientset
 	dynClient dynamic.Interface
+
+	// Informer-backed cache for FlinkDeployments (design §3.3: watch/informer
+	// instead of polling). Optional — falls back to live List until synced.
+	factory     dynamicinformer.DynamicSharedInformerFactory
+	fdInformer  informers.GenericInformer
 }
 
 // NewKubeAccessor builds an accessor. If kubeconfig is empty, in-cluster config
@@ -47,13 +55,50 @@ func NewKubeAccessor(name, namespace, kubeconfig, kubeContext string) (*KubeAcce
 	if err != nil {
 		return nil, fmt.Errorf("build dynamic client: %w", err)
 	}
+	// Namespace-scoped informer factory for the FlinkDeployment CRD.
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dyn, 30*time.Second, namespace, nil)
+	fdInformer := factory.ForResource(FlinkDeploymentGVR)
 	return &KubeAccessor{
-		name:      name,
-		namespace: namespace,
-		restCfg:   cfg,
-		clientset: cs,
-		dynClient: dyn,
+		name:       name,
+		namespace:  namespace,
+		restCfg:    cfg,
+		clientset:  cs,
+		dynClient:  dyn,
+		factory:    factory,
+		fdInformer: fdInformer,
 	}, nil
+}
+
+// Start launches the informer(s) and blocks until their caches sync (or ctx is
+// cancelled). Implements the optional cluster.Starter interface.
+func (k *KubeAccessor) Start(ctx context.Context) error {
+	k.factory.Start(ctx.Done())
+	for gvr, ok := range k.factory.WaitForCacheSync(ctx.Done()) {
+		if !ok {
+			return fmt.Errorf("informer cache for %s failed to sync", gvr.Resource)
+		}
+	}
+	return nil
+}
+
+// CachedListFlinkDeployments returns FlinkDeployments from the informer cache.
+// The bool is false until the cache has synced, so callers can fall back to a
+// live API list. Implements the optional cluster.CachedLister interface.
+func (k *KubeAccessor) CachedListFlinkDeployments() ([]*unstructured.Unstructured, bool) {
+	if k.fdInformer == nil || !k.fdInformer.Informer().HasSynced() {
+		return nil, false
+	}
+	objs, err := k.fdInformer.Lister().List(labels.Everything())
+	if err != nil {
+		return nil, false
+	}
+	out := make([]*unstructured.Unstructured, 0, len(objs))
+	for _, o := range objs {
+		if u, ok := o.(*unstructured.Unstructured); ok {
+			out = append(out, u)
+		}
+	}
+	return out, true
 }
 
 func buildRestConfig(kubeconfig, kubeContext string) (*rest.Config, error) {

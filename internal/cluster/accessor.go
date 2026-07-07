@@ -75,3 +75,16 @@ type ClusterAccessor interface {
 	// ListEvents returns recent events for the involved object name.
 	ListEvents(ctx context.Context, involvedObjectName string) ([]EventInfo, error)
 }
+
+// Starter is an optional interface for accessors that run background machinery
+// (e.g. informers) which must be started before serving.
+type Starter interface {
+	Start(ctx context.Context) error
+}
+
+// CachedLister is an optional interface for accessors backed by an informer
+// cache. The bool is false until the cache has synced, so callers fall back to
+// a live List (design §3.3).
+type CachedLister interface {
+	CachedListFlinkDeployments() ([]*unstructured.Unstructured, bool)
+}

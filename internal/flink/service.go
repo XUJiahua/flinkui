@@ -44,8 +44,19 @@ func (s *Service) lockFor(name string) *sync.Mutex {
 	return m
 }
 
-// List returns all FlinkDeployments as dashboard summaries.
+// List returns all FlinkDeployments as dashboard summaries. It reads from the
+// informer cache when the accessor provides a synced one (design §3.3), falling
+// back to a live API list otherwise.
 func (s *Service) List(ctx context.Context) ([]JobSummary, error) {
+	if cl, ok := s.acc.(cluster.CachedLister); ok {
+		if items, synced := cl.CachedListFlinkDeployments(); synced {
+			out := make([]JobSummary, 0, len(items))
+			for _, u := range items {
+				out = append(out, s.summaryFrom(u))
+			}
+			return out, nil
+		}
+	}
 	list, err := s.acc.ListFlinkDeployments(ctx)
 	if err != nil {
 		return nil, err
