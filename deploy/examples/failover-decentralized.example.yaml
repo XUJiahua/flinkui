@@ -1,0 +1,46 @@
+# Example config enabling DECENTRALIZED HA (failover-decentralized).
+# Each side's flinkui runs a mirror-image config and acts ONLY on its local
+# cluster; coordination is via the shared S3 fencing token + handoff record.
+# Run with:  ./bin/flinkui -config failover-decentralized.example.yaml
+#
+# See docs/failover-decentralized-design.md.
+
+addr: ":8080"
+
+auth:
+  username: admin
+  password: "change-me"
+  session_secret: "change-me-too"   # openssl rand -hex 16
+
+# The LOCAL cluster this instance manages (in-cluster SA => empty kubeconfig).
+# Its s3 block is the SHARED object store both sides use for fencing/handoff.
+cluster:
+  name: cluster-a
+  namespace: flink-jobs
+  kubeconfig: ""
+  s3:
+    endpoint: "https://minio.flink-operator:9000"   # S3 API port (shared store)
+    bucket: flink
+    access_key: minioadmin
+    secret_key: minioadmin
+    path_style: true
+    insecure: true
+
+# Decentralized HA groups. Only the LOCAL side is declared here; the peer runs
+# a mirror config (cluster_id=cluster-b, its own local deployment).
+ha:
+  groups:
+    - name: orders
+      namespace: flink-jobs                 # local namespace
+      deployment: flink-sql-job-orders       # local deployment
+      cluster_id: cluster-a                  # my clusterId (token value when active)
+      peer_cluster_id: cluster-b             # the other side (display + handoff)
+      # optional (defaults shown):
+      # fencing_key: fencing/active-cluster
+      # neutral_token: __switching__
+      # handoff_key: fencing/handoff/orders
+
+# On the PEER cluster's flinkui, the mirror config would be:
+#   cluster: { name: cluster-b, ... same shared s3 ... }
+#   ha.groups: [ { name: orders, namespace: ..., deployment: ...,
+#                  cluster_id: cluster-b, peer_cluster_id: cluster-a } ]
