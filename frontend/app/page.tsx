@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Circle, Wifi, WifiOff } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronsUpDown, Circle, Wifi, WifiOff } from "lucide-react";
 import { useAuthGuard } from "@/lib/use-auth";
 import { useJobsStream } from "@/lib/use-jobs-stream";
 import { Header } from "@/components/header";
@@ -17,10 +17,65 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { JobSummary } from "@/lib/types";
+
+// Sortable columns and how to extract their comparable value from a job.
+type SortKey = "jobName" | "statusText" | "desiredState" | "upgradeMode" | "parallelism" | "jobId";
+type SortDir = "asc" | "desc";
+
+const SORT_ACCESSORS: Record<SortKey, (job: JobSummary) => string | number> = {
+  jobName: (j) => j.jobName || j.deployment,
+  statusText: (j) => j.statusText,
+  desiredState: (j) => j.desiredState,
+  upgradeMode: (j) => j.upgradeMode,
+  parallelism: (j) => j.parallelism,
+  jobId: (j) => j.jobId,
+};
+
+/** compareJobs orders two jobs by the active sort key, using natural
+ *  (locale + numeric-aware) comparison for strings so e.g. "job2" sorts before
+ *  "job10". Ties fall back to the deployment name for a stable order. */
+function compareJobs(a: JobSummary, b: JobSummary, key: SortKey, dir: SortDir): number {
+  const av = SORT_ACCESSORS[key](a);
+  const bv = SORT_ACCESSORS[key](b);
+  let cmp: number;
+  if (typeof av === "number" && typeof bv === "number") {
+    cmp = av - bv;
+  } else {
+    cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
+  }
+  if (cmp === 0) {
+    // Stable tiebreaker so equal rows never reshuffle between refreshes.
+    cmp = a.deployment.localeCompare(b.deployment, undefined, { numeric: true });
+  }
+  return dir === "asc" ? cmp : -cmp;
+}
 
 export default function DashboardPage() {
   const auth = useAuthGuard();
   const { jobs, live, error, loading } = useJobsStream();
+
+  // Default sort: Job name ascending (design: deterministic default order).
+  const [sortKey, setSortKey] = React.useState<SortKey>("jobName");
+  const [sortDir, setSortDir] = React.useState<SortDir>("asc");
+
+  const toggleSort = React.useCallback((key: SortKey) => {
+    setSortKey((prevKey) => {
+      if (prevKey === key) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return prevKey;
+      }
+      setSortDir("asc");
+      return key;
+    });
+  }, []);
+
+  // Sort a copy so the source array (from the WS/poll) is never mutated. The
+  // sort is reapplied on every render, so live updates keep the chosen order.
+  const sortedJobs = React.useMemo(
+    () => [...jobs].sort((a, b) => compareJobs(a, b, sortKey, sortDir)),
+    [jobs, sortKey, sortDir],
+  );
 
   if (auth.isLoading) {
     return <CenteredMessage>Loading…</CenteredMessage>;
@@ -60,17 +115,17 @@ export default function DashboardPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Job</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Desired</TableHead>
-                    <TableHead>Upgrade</TableHead>
-                    <TableHead className="text-right">Parallelism</TableHead>
-                    <TableHead>Job ID</TableHead>
+                    <SortableHead label="Job" sortKey="jobName" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortableHead label="Status" sortKey="statusText" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortableHead label="Desired" sortKey="desiredState" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortableHead label="Upgrade" sortKey="upgradeMode" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortableHead label="Parallelism" sortKey="parallelism" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
+                    <SortableHead label="Job ID" sortKey="jobId" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {jobs.map((job) => (
+                  {sortedJobs.map((job) => (
                     <TableRow key={job.deployment}>
                       <TableCell>
                         <Link
@@ -115,6 +170,49 @@ export default function DashboardPage() {
         </Card>
       </main>
     </div>
+  );
+}
+
+/** SortableHead is a clickable column header that toggles sort on the column and
+ *  shows the active sort direction. */
+function SortableHead({
+  label,
+  sortKey,
+  activeKey,
+  dir,
+  onSort,
+  align = "left",
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+  align?: "left" | "right";
+}) {
+  const active = activeKey === sortKey;
+  return (
+    <TableHead className={align === "right" ? "text-right" : undefined}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}
+        className={`inline-flex items-center gap-1 hover:text-foreground ${
+          align === "right" ? "flex-row-reverse" : ""
+        } ${active ? "text-foreground" : ""}`}
+      >
+        {label}
+        {active ? (
+          dir === "asc" ? (
+            <ArrowUp className="h-3.5 w-3.5" />
+          ) : (
+            <ArrowDown className="h-3.5 w-3.5" />
+          )
+        ) : (
+          <ChevronsUpDown className="h-3.5 w-3.5 opacity-40" />
+        )}
+      </button>
+    </TableHead>
   );
 }
 

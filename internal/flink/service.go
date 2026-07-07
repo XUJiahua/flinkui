@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -46,7 +47,9 @@ func (s *Service) lockFor(name string) *sync.Mutex {
 
 // List returns all FlinkDeployments as dashboard summaries. It reads from the
 // informer cache when the accessor provides a synced one (design §3.3), falling
-// back to a live API list otherwise.
+// back to a live API list otherwise. Results are sorted by deployment name so
+// the payload has a deterministic default order (the informer lister returns
+// items in nondeterministic map order); the UI can re-sort client-side.
 func (s *Service) List(ctx context.Context) ([]JobSummary, error) {
 	if cl, ok := s.acc.(cluster.CachedLister); ok {
 		if items, synced := cl.CachedListFlinkDeployments(); synced {
@@ -54,6 +57,7 @@ func (s *Service) List(ctx context.Context) ([]JobSummary, error) {
 			for _, u := range items {
 				out = append(out, s.summaryFrom(u))
 			}
+			sortSummaries(out)
 			return out, nil
 		}
 	}
@@ -65,7 +69,13 @@ func (s *Service) List(ctx context.Context) ([]JobSummary, error) {
 	for i := range list.Items {
 		out = append(out, s.summaryFrom(&list.Items[i]))
 	}
+	sortSummaries(out)
 	return out, nil
+}
+
+// sortSummaries orders summaries by deployment name for a stable default order.
+func sortSummaries(out []JobSummary) {
+	sort.Slice(out, func(i, j int) bool { return out[i].Deployment < out[j].Deployment })
 }
 
 // Get returns a single deployment's detail (status + pods + events).
