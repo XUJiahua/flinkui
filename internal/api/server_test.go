@@ -79,7 +79,7 @@ func testServer(t *testing.T) http.Handler {
 	staticFS := fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<html>console</html>")},
 	}
-	return New(cfg, svc, nil, a, staticFS).Handler()
+	return New(cfg, svc, nil, nil, a, staticFS).Handler()
 }
 
 func login(t *testing.T, h http.Handler) string {

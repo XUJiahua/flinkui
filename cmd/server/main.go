@@ -13,6 +13,7 @@ import (
 	"github.com/fko-demo/flinkui/internal/auth"
 	"github.com/fko-demo/flinkui/internal/cluster"
 	"github.com/fko-demo/flinkui/internal/config"
+	"github.com/fko-demo/flinkui/internal/failover"
 	"github.com/fko-demo/flinkui/internal/flink"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/fko-demo/flinkui/web"
@@ -80,13 +81,21 @@ func main() {
 		log.Printf("WARNING: auth password is empty; set FKO_AUTH_PASSWORD to secure the platform")
 	}
 
+	// Failover / HA groups (design failover P1). Enabled when groups are declared.
+	var fo *failover.Service
+	if len(cfg.HAGroups) > 0 {
+		reg := cluster.NewRegistry(cfg)
+		fo = failover.NewService(cfg, reg)
+		log.Printf("failover enabled: %d HA group(s) declared", len(cfg.HAGroups))
+	}
+
 	// Embedded frontend rooted at web/dist.
 	staticFS, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
 		log.Fatalf("mount embedded frontend: %v", err)
 	}
 
-	srv := api.New(cfg, svc, st, a, staticFS)
+	srv := api.New(cfg, svc, st, fo, a, staticFS)
 	log.Printf("Flink job console %s listening on %s (cluster=%s namespace=%s)",
 		version, cfg.Addr, cfg.Cluster.Name, cfg.Cluster.Namespace)
 	if err := srv.Run(); err != nil {

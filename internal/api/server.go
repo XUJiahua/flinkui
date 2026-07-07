@@ -7,6 +7,7 @@ import (
 
 	"github.com/fko-demo/flinkui/internal/auth"
 	"github.com/fko-demo/flinkui/internal/config"
+	"github.com/fko-demo/flinkui/internal/failover"
 	"github.com/fko-demo/flinkui/internal/flink"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/gin-gonic/gin"
@@ -19,11 +20,11 @@ type Server struct {
 }
 
 // New builds the HTTP server: API routes, auth, WebSocket, and SPA static serving.
-func New(cfg *config.Config, svc *flink.Service, st *store.Store, a *auth.Auth, staticFS fs.FS) *Server {
+func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.Service, a *auth.Auth, staticFS fs.FS) *Server {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
-	h := &Handlers{svc: svc, store: st, cfg: cfg}
+	h := &Handlers{svc: svc, store: st, cfg: cfg, fo: fo}
 	hub := newStatusHub(h, a, cfg.StatusPollSec)
 
 	// Public health endpoints (no auth) for liveness/readiness probes.
@@ -55,6 +56,12 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, a *auth.Auth, 
 
 		// Async operation status (savepoint / restart progress).
 		api.GET("/operations/:id", h.getOperation)
+
+		// HA groups (failover P1a: read-only observation).
+		api.GET("/ha-groups", h.listHAGroups)
+		api.GET("/ha-groups/:name", h.getHAGroup)
+		api.GET("/ha-groups/:name/fencing", h.getHAGroupFencing)
+		api.GET("/ha-groups/:name/recovery-points", h.getHAGroupRecoveryPoints)
 	}
 
 	// WebSocket status stream (auth handled inside via cookie).

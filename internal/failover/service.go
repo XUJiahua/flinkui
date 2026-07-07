@@ -20,11 +20,17 @@ type Service struct {
 
 	mu      sync.Mutex
 	fencing map[string]*store.FencingStore // key: group name
+	recov   map[string]*store.Store        // key: group name (recovery-point lister)
 }
 
 // NewService builds the failover service.
 func NewService(cfg *config.Config, reg *cluster.Registry) *Service {
-	return &Service{cfg: cfg, reg: reg, fencing: map[string]*store.FencingStore{}}
+	return &Service{
+		cfg:     cfg,
+		reg:     reg,
+		fencing: map[string]*store.FencingStore{},
+		recov:   map[string]*store.Store{},
+	}
 }
 
 // Groups returns the names of declared HA groups.
@@ -207,4 +213,57 @@ func (s *Service) deriveActiveAndSplitBrain(v *GroupView, g config.HAGroupConfig
 			v.Warning = "fencing token value does not match either side's clusterId"
 		}
 	}
+}
+
+// RecoveryPoints lists the HA group's shared savepoints/checkpoints from S3,
+// using a reachable side's configured state dirs (both sides share the same S3).
+func (s *Service) RecoveryPoints(ctx context.Context, name string) ([]store.RecoveryPoint, error) {
+	g, ok := s.cfg.HAGroupByName(name)
+	if !ok {
+		return nil, fmt.Errorf("HA group %q not found", name)
+	}
+	st, err := s.recovStore(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	// Prefer the primary side's dirs; fall back to standby if primary unreachable.
+	spDir, cpDir, job := s.recoveryDirs(ctx, g.Primary)
+	if spDir == "" && cpDir == "" {
+		spDir, cpDir, job = s.recoveryDirs(ctx, g.Standby)
+	}
+	return st.ListRecoveryPoints(ctx, job, spDir, cpDir)
+}
+
+// recoveryDirs reads a side's configured savepoint/checkpoint dirs (best-effort).
+func (s *Service) recoveryDirs(ctx context.Context, side config.SideConfig) (sp, cp, job string) {
+	job = s.cfg.JobName(side.Deployment)
+	acc, err := s.reg.AccessorFor(side.Cluster, side.Namespace)
+	if err != nil {
+		return "", "", job
+	}
+	fsvc := flink.NewService(acc, s.cfg)
+	sp, cp, err = fsvc.RecoveryDirs(ctx, side.Deployment)
+	if err != nil {
+		return "", "", job
+	}
+	return sp, cp, job
+}
+
+// recovStore lazily builds (and caches) the recovery-point Store for a group.
+func (s *Service) recovStore(ctx context.Context, g config.HAGroupConfig) (*store.Store, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st, ok := s.recov[g.Name]; ok {
+		return st, nil
+	}
+	cc, ok := s.cfg.ClusterByName(g.S3Cluster)
+	if !ok {
+		return nil, fmt.Errorf("s3Cluster %q not found for group %q", g.S3Cluster, g.Name)
+	}
+	st, err := store.New(ctx, cc.S3)
+	if err != nil {
+		return nil, err
+	}
+	s.recov[g.Name] = st
+	return st, nil
 }

@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/fko-demo/flinkui/internal/config"
+	"github.com/fko-demo/flinkui/internal/failover"
 	"github.com/fko-demo/flinkui/internal/flink"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/gin-gonic/gin"
@@ -17,6 +18,7 @@ type Handlers struct {
 	svc   *flink.Service
 	store *store.Store // may be nil if S3 not configured
 	cfg   *config.Config
+	fo    *failover.Service // HA-group observation (may be nil if no groups)
 }
 
 // listJobs handles GET /api/jobs.
