@@ -8,6 +8,7 @@ import { useJobsStream } from "@/lib/use-jobs-stream";
 import { Header } from "@/components/header";
 import { StatusBadge } from "@/components/status-badge";
 import { LifecycleActions } from "@/components/lifecycle-actions";
+import { BatchActions } from "@/components/batch-actions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -77,6 +78,47 @@ export default function DashboardPage() {
     [jobs, sortKey, sortDir],
   );
 
+  // Multi-select for batch operations, keyed by deployment name.
+  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+
+  const visibleNames = React.useMemo(() => sortedJobs.map((j) => j.deployment), [sortedJobs]);
+
+  // Keep the selection in sync with what's actually listed (prune vanished jobs).
+  React.useEffect(() => {
+    setSelected((prev) => {
+      const visible = new Set(visibleNames);
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((n) => {
+        if (visible.has(n)) next.add(n);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [visibleNames]);
+
+  const selectedList = React.useMemo(() => [...selected], [selected]);
+  const allSelected = visibleNames.length > 0 && visibleNames.every((n) => selected.has(n));
+  const someSelected = visibleNames.some((n) => selected.has(n));
+
+  const toggleAll = React.useCallback(() => {
+    setSelected((prev) => {
+      if (visibleNames.every((n) => prev.has(n))) return new Set();
+      return new Set(visibleNames);
+    });
+  }, [visibleNames]);
+
+  const toggleOne = React.useCallback((name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = React.useCallback(() => setSelected(new Set()), []);
+
   if (auth.isLoading) {
     return <CenteredMessage>Loading…</CenteredMessage>;
   }
@@ -112,59 +154,82 @@ export default function DashboardPage() {
                 No FlinkDeployments found in this namespace.
               </p>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableHead label="Job" sortKey="jobName" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableHead label="Status" sortKey="statusText" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableHead label="Desired" sortKey="desiredState" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableHead label="Upgrade" sortKey="upgradeMode" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableHead label="Parallelism" sortKey="parallelism" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
-                    <SortableHead label="Job ID" sortKey="jobId" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedJobs.map((job) => (
-                    <TableRow key={job.deployment}>
-                      <TableCell>
-                        <Link
-                          href={`/job?name=${encodeURIComponent(job.deployment)}`}
-                          className="font-medium hover:underline"
-                        >
-                          {job.jobName || job.deployment}
-                        </Link>
-                        <div className="text-xs text-muted-foreground">{job.namespace}</div>
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge job={job} />
-                      </TableCell>
-                      <TableCell>
-                        <span className="flex items-center gap-1 text-sm">
-                          <Circle
-                            className={
-                              job.desiredState === "running"
-                                ? "h-2 w-2 fill-green-600 text-green-600"
-                                : "h-2 w-2 fill-muted-foreground text-muted-foreground"
-                            }
-                          />
-                          {job.desiredState || "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-sm">{job.upgradeMode || "—"}</TableCell>
-                      <TableCell className="text-right text-sm">{job.parallelism || "—"}</TableCell>
-                      <TableCell className="max-w-[10rem] truncate font-mono text-xs text-muted-foreground">
-                        {job.jobId || "—"}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end">
-                          <LifecycleActions jobName={job.deployment} compact />
-                        </div>
-                      </TableCell>
+              <>
+                {someSelected && (
+                  <div className="mb-3">
+                    <BatchActions selected={selectedList} onClear={clearSelection} />
+                  </div>
+                )}
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8">
+                        <SelectAllCheckbox
+                          checked={allSelected}
+                          indeterminate={someSelected && !allSelected}
+                          onChange={toggleAll}
+                        />
+                      </TableHead>
+                      <SortableHead label="Job" sortKey="jobName" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                      <SortableHead label="Status" sortKey="statusText" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                      <SortableHead label="Desired" sortKey="desiredState" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                      <SortableHead label="Upgrade" sortKey="upgradeMode" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                      <SortableHead label="Parallelism" sortKey="parallelism" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
+                      <SortableHead label="Job ID" sortKey="jobId" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedJobs.map((job) => (
+                      <TableRow key={job.deployment} data-state={selected.has(job.deployment) ? "selected" : undefined}>
+                        <TableCell>
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-input align-middle accent-primary"
+                            checked={selected.has(job.deployment)}
+                            onChange={() => toggleOne(job.deployment)}
+                            aria-label={`Select ${job.jobName || job.deployment}`}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Link
+                            href={`/job?name=${encodeURIComponent(job.deployment)}`}
+                            className="font-medium hover:underline"
+                          >
+                            {job.jobName || job.deployment}
+                          </Link>
+                          <div className="text-xs text-muted-foreground">{job.namespace}</div>
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge job={job} />
+                        </TableCell>
+                        <TableCell>
+                          <span className="flex items-center gap-1 text-sm">
+                            <Circle
+                              className={
+                                job.desiredState === "running"
+                                  ? "h-2 w-2 fill-green-600 text-green-600"
+                                  : "h-2 w-2 fill-muted-foreground text-muted-foreground"
+                              }
+                            />
+                            {job.desiredState || "—"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-sm">{job.upgradeMode || "—"}</TableCell>
+                        <TableCell className="text-right text-sm">{job.parallelism || "—"}</TableCell>
+                        <TableCell className="max-w-[10rem] truncate font-mono text-xs text-muted-foreground">
+                          {job.jobId || "—"}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-end">
+                            <LifecycleActions jobName={job.deployment} compact />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
             )}
           </CardContent>
         </Card>
@@ -221,5 +286,32 @@ function CenteredMessage({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
       {children}
     </div>
+  );
+}
+
+/** SelectAllCheckbox is a header checkbox supporting the indeterminate state
+ *  (some-but-not-all rows selected), which HTML only exposes via a ref. */
+function SelectAllCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  onChange: () => void;
+}) {
+  const ref = React.useRef<HTMLInputElement>(null);
+  React.useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="h-4 w-4 rounded border-input align-middle accent-primary"
+      checked={checked}
+      onChange={onChange}
+      aria-label="Select all jobs"
+    />
   );
 }
