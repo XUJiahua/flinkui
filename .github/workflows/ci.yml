@@ -1,0 +1,73 @@
+name: CI
+
+# Fast quality gate on every push to main and every pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Go vet + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race ./...
+
+  frontend:
+    name: Frontend build + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Type-check
+        working-directory: frontend
+        run: pnpm exec tsc --noEmit
+      - name: Build (static export)
+        working-directory: frontend
+        run: pnpm build
+
+  helm:
+    name: Helm lint + template
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: helm lint
+        run: helm lint deploy/helm/flinkui --set auth.password=ci --set auth.sessionSecret=ci
+      - name: helm template (render)
+        run: |
+          helm template flinkui deploy/helm/flinkui \
+            --set auth.password=ci --set auth.sessionSecret=ci \
+            --set s3.enabled=true --set s3.accessKey=ci --set s3.secretKey=ci \
+            --set ingress.enabled=true > /dev/null
