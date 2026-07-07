@@ -16,7 +16,7 @@
 
 用 ServiceAccount 的 **身份 + 最小 RBAC** 运行本地二进制。代码仍走
 out-of-cluster 的 kubeconfig 路径，但请求以 ServiceAccount token 发出，因此能
-**验证 `deploy/rbac.yaml` 的权限是否恰好够用**（这是 in-cluster 最容易踩坑的地方）。
+**验证 Helm chart 授予的最小 RBAC 是否恰好够用**（这是 in-cluster 最容易踩坑的地方）。
 
 一条命令搞定（脚本会幂等创建 SA + Role + RoleBinding，签发 token，并生成一个以
 该 SA 认证的 kubeconfig）：
@@ -85,26 +85,24 @@ k3d image import flinkui:dev -c <cluster>
 #   kind load docker-image flinkui:dev
 #   minikube image load flinkui:dev
 
-# 3) 创建 auth Secret（S3 Secret 可选）
-kubectl -n flink-jobs create secret generic flink-console-auth \
-  --from-literal=username=admin \
-  --from-literal=password='change-me' \
-  --from-literal=session-secret="$(openssl rand -hex 16)"
+# 3) 用 Helm 部署（SA + 最小 RBAC + Deployment + Service + Secret 一并创建）
+helm upgrade --install flinkui deploy/helm/flinkui \
+  -n flink-jobs --create-namespace \
+  --set image.repository=flinkui --set image.tag=dev --set image.pullPolicy=Never \
+  --set config.targetNamespace=flink-jobs \
+  --set auth.password='change-me' \
+  --set auth.sessionSecret="$(openssl rand -hex 16)"
 
-# 4) 部署 SA + RBAC + Deployment + Service（先按需改 image / namespace）
-kubectl -n flink-jobs apply -f deploy/rbac.yaml
-
-# 5) 从本地访问集群内的控制台
-kubectl -n flink-jobs port-forward deploy/flink-console 8080:8080
+# 4) 从本地访问集群内的控制台
+kubectl -n flink-jobs port-forward svc/flinkui 8080:80
 # 打开 http://localhost:8080
 ```
 
 此形态下 `FKO_CLUSTER_KUBECONFIG` **留空**（用挂载的 ServiceAccount），且 S3 endpoint
 可直接用集群内 Service 名，无需 port-forward。
 
-> 注意：`deploy/rbac.yaml` 里的 namespace 默认是 `flink-operator`，示例集群的作业在
-> `flink-jobs`。请把清单中的 namespace 改成实际存放 FlinkDeployment 的 namespace
-> （Role/RoleBinding/Deployment 需与作业同 namespace）。
+> 说明：chart 用 `config.targetNamespace` 指定存放 FlinkDeployment 的 namespace，
+> Role/RoleBinding 会创建到该 namespace（可与 release namespace 不同）。
 
 ---
 

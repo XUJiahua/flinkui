@@ -4,7 +4,7 @@
 #
 # Simulate the *in-cluster* usage scenario from your local machine by running
 # the console with the ServiceAccount's identity and minimal RBAC — instead of
-# your admin kubeconfig. This validates that deploy/rbac.yaml grants exactly the
+# your admin kubeconfig. This validates that the Helm chart's Role grants exactly the
 # permissions the platform needs (get/list/watch/patch flinkdeployments, pods,
 # pods/log, pods/exec, events).
 #

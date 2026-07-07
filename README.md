@@ -137,25 +137,10 @@ make docker IMAGE=your-registry/flinkui:0.1.0
 docker push your-registry/flinkui:0.1.0
 ```
 
-Deploy in-cluster with the provided RBAC (ServiceAccount + Role granting
-`flinkdeployments` get/list/watch/patch, `pods`/`pods/log`, `pods/exec`,
-`pods/portforward`, `events`):
-
-```bash
-kubectl -n flink-operator create secret generic flink-console-auth \
-  --from-literal=username=admin \
-  --from-literal=password='change-me' \
-  --from-literal=session-secret="$(openssl rand -hex 16)"
-
-# optional S3 secret for the rollback selector
-kubectl -n flink-operator create secret generic flink-console-s3 \
-  --from-literal=endpoint='http://minio:9000' \
-  --from-literal=bucket='halykbank-flink' \
-  --from-literal=access-key='...' \
-  --from-literal=secret-key='...'
-
-kubectl -n flink-operator apply -f deploy/rbac.yaml   # edit the image first
-```
+Deploy in-cluster with the **Helm chart** (see below), which creates the
+ServiceAccount + minimal RBAC (Role granting `flinkdeployments`
+get/list/watch/patch, `pods`/`pods/log`, `pods/exec`, `pods/portforward`,
+`events`), the Deployment, Service, and the auth / S3 Secrets.
 
 In-cluster the backend uses the mounted ServiceAccount (leave
 `FKO_CLUSTER_KUBECONFIG` unset) and can reach the JobManager REST service and
