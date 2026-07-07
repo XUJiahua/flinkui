@@ -52,6 +52,9 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, a *auth.Auth, 
 		api.POST("/jobs/:name/restart", h.restart)
 		api.POST("/jobs/:name/savepoint", h.savepoint)
 		api.POST("/jobs/:name/rollback", h.rollback)
+
+		// Async operation status (savepoint / restart progress).
+		api.GET("/operations/:id", h.getOperation)
 	}
 
 	// WebSocket status stream (auth handled inside via cookie).

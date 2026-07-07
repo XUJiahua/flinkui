@@ -23,11 +23,13 @@ type Service struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+
+	ops *operationStore
 }
 
 // NewService constructs a Service.
 func NewService(acc cluster.ClusterAccessor, cfg *config.Config) *Service {
-	return &Service{acc: acc, cfg: cfg, locks: map[string]*sync.Mutex{}}
+	return &Service{acc: acc, cfg: cfg, locks: map[string]*sync.Mutex{}, ops: newOperationStore()}
 }
 
 // lockFor returns (and lazily creates) the mutex guarding a deployment.
@@ -189,12 +191,23 @@ func (s *Service) Restart(ctx context.Context, name string) error {
 
 // waitStopped polls until the JM pod count reaches zero or the timeout elapses.
 func (s *Service) waitStopped(ctx context.Context, dep string) {
+	s.waitStoppedProgress(ctx, dep, nil)
+}
+
+// waitStoppedProgress is waitStopped with an optional per-tick callback that
+// reports the current JobManager pod count (for restart progress display).
+func (s *Service) waitStoppedProgress(ctx context.Context, dep string, onTick func(pods int)) {
 	selector := fmt.Sprintf("app=%s,component=jobmanager", dep)
 	deadline := time.Now().Add(time.Duration(s.cfg.StopTimeoutSec) * time.Second)
 	for time.Now().Before(deadline) {
 		n, err := s.acc.CountPods(ctx, selector)
-		if err == nil && n == 0 {
-			return
+		if err == nil {
+			if onTick != nil {
+				onTick(n)
+			}
+			if n == 0 {
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():

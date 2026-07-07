@@ -50,15 +50,18 @@ func (h *Handlers) getLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"logs": logs})
 }
 
-// suspend/resume/restart handlers.
+// suspend/resume are immediate; restart is async (returns an operation).
 func (h *Handlers) suspend(c *gin.Context) {
 	h.doOp(c, func() error { return h.svc.Suspend(c.Request.Context(), c.Param("name")) })
 }
 func (h *Handlers) resume(c *gin.Context) {
 	h.doOp(c, func() error { return h.svc.Resume(c.Request.Context(), c.Param("name")) })
 }
+
+// restart starts an async restart and returns the tracking operation.
 func (h *Handlers) restart(c *gin.Context) {
-	h.doOp(c, func() error { return h.svc.Restart(c.Request.Context(), c.Param("name")) })
+	op := h.svc.StartRestart(c.Param("name"))
+	c.JSON(http.StatusAccepted, op)
 }
 
 // doOp runs a mutating operation and returns a uniform response.
@@ -70,14 +73,20 @@ func (h *Handlers) doOp(c *gin.Context, fn func() error) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// savepoint handles POST /api/jobs/:name/savepoint.
+// savepoint starts an async savepoint and returns the tracking operation.
 func (h *Handlers) savepoint(c *gin.Context) {
-	res, err := h.svc.Savepoint(c.Request.Context(), c.Param("name"))
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+	op := h.svc.StartSavepoint(c.Param("name"))
+	c.JSON(http.StatusAccepted, op)
+}
+
+// getOperation handles GET /api/operations/:id (poll async op progress/result).
+func (h *Handlers) getOperation(c *gin.Context) {
+	op, ok := h.svc.GetOperation(c.Param("id"))
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "operation not found"})
 		return
 	}
-	c.JSON(http.StatusOK, res)
+	c.JSON(http.StatusOK, op)
 }
 
 // rollbackRequest is the JSON body for rollback.
