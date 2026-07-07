@@ -3,6 +3,7 @@
 // NEXT_PUBLIC_API_BASE to point at a running backend.
 import type {
   ClusterInfo,
+  GroupView,
   JobDetail,
   JobSummary,
   Operation,
@@ -85,6 +86,15 @@ export const api = {
   // Async operation status (savepoint / restart progress).
   getOperation: (id: string) =>
     request<Operation>(`/api/operations/${encodeURIComponent(id)}`),
+
+  // Failover / HA groups.
+  listHAGroups: () => request<{ groups: GroupView[] }>("/api/ha-groups"),
+  getHAGroup: (name: string) =>
+    request<GroupView>(`/api/ha-groups/${encodeURIComponent(name)}`),
+  haRecoveryPoints: (name: string) =>
+    request<{ recoveryPoints: RecoveryPoint[] }>(
+      `/api/ha-groups/${encodeURIComponent(name)}/recovery-points`,
+    ),
 };
 
 /** pollOperation polls an async operation until it finishes (or times out),

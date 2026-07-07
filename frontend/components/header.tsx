@@ -27,6 +27,14 @@ export function Header() {
           <Activity className="h-5 w-5" />
           Flink Job Console
         </Link>
+        <nav className="flex items-center gap-4 text-sm">
+          <Link href="/" className="text-muted-foreground hover:text-foreground">
+            Jobs
+          </Link>
+          <Link href="/ha" className="text-muted-foreground hover:text-foreground">
+            HA
+          </Link>
+        </nav>
         <div className="flex items-center gap-4 text-sm text-muted-foreground">
           {cluster.data && (
             <span>
