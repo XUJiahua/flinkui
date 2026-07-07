@@ -5,6 +5,7 @@ import type {
   ClusterInfo,
   JobDetail,
   JobSummary,
+  LogComponent,
   Operation,
   RecoveryPoint,
 } from "./types";
@@ -56,8 +57,10 @@ export const api = {
   cluster: () => request<ClusterInfo>("/api/cluster"),
   listJobs: () => request<{ jobs: JobSummary[] }>("/api/jobs"),
   getJob: (name: string) => request<JobDetail>(`/api/jobs/${encodeURIComponent(name)}`),
-  logs: (name: string, tail = 200) =>
-    request<{ logs: string }>(`/api/jobs/${encodeURIComponent(name)}/logs?tail=${tail}`),
+  logs: (name: string, tail = 200, component: LogComponent = "jobmanager") =>
+    request<{ logs: string }>(
+      `/api/jobs/${encodeURIComponent(name)}/logs?tail=${tail}&component=${component}`,
+    ),
   recoveryPoints: (name: string) =>
     request<{ recoveryPoints: RecoveryPoint[] }>(
       `/api/jobs/${encodeURIComponent(name)}/recovery-points`,

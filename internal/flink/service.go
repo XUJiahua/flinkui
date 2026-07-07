@@ -259,14 +259,25 @@ func (s *Service) Rollback(ctx context.Context, name, path string) error {
 	return s.acc.PatchFlinkDeployment(ctx, dep, patch)
 }
 
-// Logs tails JobManager logs across matching pods (design §4.3).
-func (s *Service) Logs(ctx context.Context, name string, tail int64) (string, error) {
+// Logs tails JobManager or TaskManager logs across matching pods (design §4.3).
+// component selects the pod role ("jobmanager" or "taskmanager"); anything else
+// defaults to jobmanager.
+func (s *Service) Logs(ctx context.Context, name, component string, tail int64) (string, error) {
 	dep := s.cfg.DeploymentName(name)
 	if tail <= 0 {
 		tail = s.cfg.LogTailLines
 	}
-	selector := fmt.Sprintf("app=%s,component=jobmanager", dep)
+	selector := fmt.Sprintf("app=%s,component=%s", dep, normalizeComponent(component))
 	return s.acc.PodLogs(ctx, selector, "flink-main-container", tail)
+}
+
+// normalizeComponent restricts the pod-role selector to the two valid values,
+// defaulting to jobmanager.
+func normalizeComponent(component string) string {
+	if component == "taskmanager" {
+		return "taskmanager"
+	}
+	return "jobmanager"
 }
 
 // RecoveryDirs returns the deployment's configured savepoint and checkpoint

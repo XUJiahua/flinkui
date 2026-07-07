@@ -52,7 +52,7 @@ Browser ── HTTP/WS ──► Go backend ── K8s API ──► FlinkDeploy
 | Restart   | suspend → wait JM pod = 0 → resume (last-state) |
 | Savepoint | JM REST `POST /jobs/{jobId}/savepoints` via pod exec, poll to COMPLETED |
 | Rollback  | patch `state=running` + `initialSavepointPath` + `savepointRedeployNonce` |
-| Logs      | `GET pods/log` with label selector `app=<dep>,component=jobmanager` |
+| Logs      | `GET pods/log` with label selector `app=<dep>,component=<jobmanager\|taskmanager>` |
 
 ## Prerequisites
 

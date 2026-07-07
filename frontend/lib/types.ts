@@ -60,6 +60,9 @@ export interface SavepointResult {
 export type OperationType = "savepoint" | "restart";
 export type OperationStatus = "running" | "succeeded" | "failed";
 
+/** LogComponent selects which pod role's logs to fetch. */
+export type LogComponent = "jobmanager" | "taskmanager";
+
 export interface Operation {
   id: string;
   type: OperationType;

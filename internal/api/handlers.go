@@ -39,10 +39,11 @@ func (h *Handlers) getJob(c *gin.Context) {
 	c.JSON(http.StatusOK, detail)
 }
 
-// getLogs handles GET /api/jobs/:name/logs?tail=N.
+// getLogs handles GET /api/jobs/:name/logs?tail=N&component=jobmanager|taskmanager.
 func (h *Handlers) getLogs(c *gin.Context) {
 	tail, _ := strconv.ParseInt(c.DefaultQuery("tail", "0"), 10, 64)
-	logs, err := h.svc.Logs(c.Request.Context(), c.Param("name"), tail)
+	component := c.DefaultQuery("component", "jobmanager")
+	logs, err := h.svc.Logs(c.Request.Context(), c.Param("name"), component, tail)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

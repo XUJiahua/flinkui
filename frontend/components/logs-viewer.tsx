@@ -4,18 +4,25 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import type { LogComponent } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-/** LogsViewer tails JobManager logs with adjustable tail size and keyword filter
- *  (design §4.3). */
+const COMPONENTS: { value: LogComponent; label: string }[] = [
+  { value: "jobmanager", label: "JobManager" },
+  { value: "taskmanager", label: "TaskManager" },
+];
+
+/** LogsViewer tails JobManager or TaskManager logs with adjustable tail size,
+ *  a component switch, and a keyword filter (design §4.3). */
 export function LogsViewer({ jobName }: { jobName: string }) {
+  const [component, setComponent] = React.useState<LogComponent>("jobmanager");
   const [tail, setTail] = React.useState(200);
   const [filter, setFilter] = React.useState("");
 
   const logs = useQuery({
-    queryKey: ["logs", jobName, tail],
-    queryFn: () => api.logs(jobName, tail),
+    queryKey: ["logs", jobName, component, tail],
+    queryFn: () => api.logs(jobName, tail, component),
   });
 
   const text = logs.data?.logs ?? "";
@@ -29,6 +36,24 @@ export function LogsViewer({ jobName }: { jobName: string }) {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-md border border-input p-0.5">
+          {COMPONENTS.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              onClick={() => setComponent(c.value)}
+              className={
+                "rounded px-3 py-1 text-sm transition-colors " +
+                (component === c.value
+                  ? "bg-secondary text-secondary-foreground"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+              aria-pressed={component === c.value}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
         <label className="text-sm text-muted-foreground">Tail</label>
         <select
           className="h-9 rounded-md border border-input bg-background px-2 text-sm"
@@ -60,7 +85,10 @@ export function LogsViewer({ jobName }: { jobName: string }) {
       )}
 
       <pre className="max-h-[28rem] overflow-auto rounded-md bg-zinc-950 p-4 text-xs leading-relaxed text-zinc-100">
-        {logs.isLoading ? "Loading logs…" : lines.join("\n") || "No log output."}
+        {logs.isLoading
+          ? "Loading logs…"
+          : lines.join("\n") ||
+            `No ${component === "taskmanager" ? "TaskManager" : "JobManager"} log output.`}
       </pre>
     </div>
   );

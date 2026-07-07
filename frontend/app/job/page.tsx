@@ -161,7 +161,7 @@ function JobDetail({ name }: { name: string }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>JobManager Logs</CardTitle>
+            <CardTitle>Logs</CardTitle>
           </CardHeader>
           <CardContent>
             <LogsViewer jobName={name} />
