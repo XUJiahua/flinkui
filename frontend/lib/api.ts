@@ -5,8 +5,8 @@ import type {
   ClusterInfo,
   JobDetail,
   JobSummary,
+  Operation,
   RecoveryPoint,
-  SavepointResult,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
@@ -73,15 +73,41 @@ export const api = {
   resume: (name: string) =>
     request<{ ok: boolean }>(`/api/jobs/${encodeURIComponent(name)}/resume`, { method: "POST" }),
   restart: (name: string) =>
-    request<{ ok: boolean }>(`/api/jobs/${encodeURIComponent(name)}/restart`, { method: "POST" }),
+    request<Operation>(`/api/jobs/${encodeURIComponent(name)}/restart`, { method: "POST" }),
   savepoint: (name: string) =>
-    request<SavepointResult>(`/api/jobs/${encodeURIComponent(name)}/savepoint`, { method: "POST" }),
+    request<Operation>(`/api/jobs/${encodeURIComponent(name)}/savepoint`, { method: "POST" }),
   rollback: (name: string, path: string) =>
     request<{ ok: boolean }>(`/api/jobs/${encodeURIComponent(name)}/rollback`, {
       method: "POST",
       body: JSON.stringify({ path }),
     }),
+
+  // Async operation status (savepoint / restart progress).
+  getOperation: (id: string) =>
+    request<Operation>(`/api/operations/${encodeURIComponent(id)}`),
 };
+
+/** pollOperation polls an async operation until it finishes (or times out),
+ *  invoking onProgress with each snapshot. Returns the terminal Operation. */
+export async function pollOperation(
+  id: string,
+  onProgress?: (op: Operation) => void,
+  opts: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<Operation> {
+  const intervalMs = opts.intervalMs ?? 2000;
+  const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000;
+  const deadline = Date.now() + timeoutMs;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const op = await api.getOperation(id);
+    onProgress?.(op);
+    if (op.status !== "running") return op;
+    if (Date.now() > deadline) {
+      return { ...op, status: "failed", error: "polling timed out" };
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
 
 /** wsStatusUrl builds the WebSocket URL for the status stream. */
 export function wsStatusUrl(): string {

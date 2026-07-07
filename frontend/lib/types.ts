@@ -56,3 +56,19 @@ export interface ClusterInfo {
 export interface SavepointResult {
   location: string;
 }
+
+export type OperationType = "savepoint" | "restart";
+export type OperationStatus = "running" | "succeeded" | "failed";
+
+export interface Operation {
+  id: string;
+  type: OperationType;
+  deployment: string;
+  jobName: string;
+  status: OperationStatus;
+  progress: string;
+  result?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+}

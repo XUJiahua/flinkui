@@ -2,8 +2,9 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pause, Play, RotateCw, Save, History } from "lucide-react";
-import { api, ApiError } from "@/lib/api";
+import { Pause, Play, RotateCw, Save, History, Loader2 } from "lucide-react";
+import { api, ApiError, pollOperation } from "@/lib/api";
+import type { Operation } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -16,12 +17,14 @@ interface LifecycleActionsProps {
   compact?: boolean;
 }
 
-/** LifecycleActions renders suspend/resume/restart/savepoint/rollback controls
- *  with confirmations for high-risk ops (design §4.2). */
+/** LifecycleActions renders suspend/resume/restart/savepoint/rollback controls.
+ *  Restart and savepoint are asynchronous: after triggering, their progress is
+ *  polled and shown inline until they succeed/fail/time out (design §4.2). */
 export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleActionsProps) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [busy, setBusy] = React.useState<string | null>(null);
+  const [progress, setProgress] = React.useState<string>("");
   const [confirmRestart, setConfirmRestart] = React.useState(false);
   const [rollbackOpen, setRollbackOpen] = React.useState(false);
 
@@ -30,15 +33,12 @@ export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleAct
     qc.invalidateQueries({ queryKey: ["job", jobName] });
   };
 
-  const run = async (label: string, fn: () => Promise<unknown>, successMsg?: string) => {
+  // Immediate operations (suspend/resume): single request, then refresh.
+  const runImmediate = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(label);
     try {
-      const res = await fn();
-      const desc =
-        successMsg ?? (res && typeof res === "object" && "location" in res
-          ? String((res as { location: string }).location)
-          : undefined);
-      toast({ title: `${label} requested`, description: desc, variant: "success" });
+      await fn();
+      toast({ title: `${label} requested`, variant: "success" });
       refresh();
     } catch (err) {
       toast({
@@ -51,7 +51,41 @@ export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleAct
     }
   };
 
+  // Async operations (savepoint/restart): trigger -> poll progress -> result.
+  const runAsync = async (label: string, start: () => Promise<Operation>) => {
+    setBusy(label);
+    setProgress("starting…");
+    try {
+      const op = await start();
+      const final = await pollOperation(op.id, (o) => setProgress(o.progress));
+      if (final.status === "succeeded") {
+        toast({
+          title: `${label} completed`,
+          description: final.result || undefined,
+          variant: "success",
+        });
+      } else {
+        toast({
+          title: `${label} failed`,
+          description: final.error || final.progress,
+          variant: "error",
+        });
+      }
+      refresh();
+    } catch (err) {
+      toast({
+        title: `${label} failed`,
+        description: err instanceof ApiError ? err.message : String(err),
+        variant: "error",
+      });
+    } finally {
+      setBusy(null);
+      setProgress("");
+    }
+  };
+
   const label = (text: string) => (compact ? null : <span>{text}</span>);
+  const spin = <Loader2 className="h-4 w-4 animate-spin" />;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -59,7 +93,7 @@ export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleAct
         variant="outline"
         size={size}
         disabled={!!busy}
-        onClick={() => run("Suspend", () => api.suspend(jobName))}
+        onClick={() => runImmediate("Suspend", () => api.suspend(jobName))}
       >
         <Pause className="h-4 w-4" />
         {label("Suspend")}
@@ -69,7 +103,7 @@ export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleAct
         variant="outline"
         size={size}
         disabled={!!busy}
-        onClick={() => run("Resume", () => api.resume(jobName))}
+        onClick={() => runImmediate("Resume", () => api.resume(jobName))}
       >
         <Play className="h-4 w-4" />
         {label("Resume")}
@@ -81,7 +115,7 @@ export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleAct
         disabled={!!busy}
         onClick={() => setConfirmRestart(true)}
       >
-        <RotateCw className="h-4 w-4" />
+        {busy === "Restart" ? spin : <RotateCw className="h-4 w-4" />}
         {label("Restart")}
       </Button>
 
@@ -89,10 +123,10 @@ export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleAct
         variant="outline"
         size={size}
         disabled={!!busy}
-        onClick={() => run("Savepoint", () => api.savepoint(jobName))}
+        onClick={() => runAsync("Savepoint", () => api.savepoint(jobName))}
       >
-        <Save className="h-4 w-4" />
-        {label(busy === "Savepoint" ? "Saving…" : "Savepoint")}
+        {busy === "Savepoint" ? spin : <Save className="h-4 w-4" />}
+        {label("Savepoint")}
       </Button>
 
       <Button
@@ -105,6 +139,12 @@ export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleAct
         {label("Rollback")}
       </Button>
 
+      {busy && progress && (
+        <span className="text-xs text-muted-foreground">
+          {busy}: {progress}
+        </span>
+      )}
+
       <ConfirmDialog
         open={confirmRestart}
         title={`Restart ${jobName}?`}
@@ -114,8 +154,8 @@ export function LifecycleActions({ jobName, size = "sm", compact }: LifecycleAct
         loading={busy === "Restart"}
         onClose={() => setConfirmRestart(false)}
         onConfirm={async () => {
-          await run("Restart", () => api.restart(jobName));
           setConfirmRestart(false);
+          await runAsync("Restart", () => api.restart(jobName));
         }}
       />
 
