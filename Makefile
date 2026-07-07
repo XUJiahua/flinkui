@@ -49,3 +49,8 @@ docker:
 ## clean: remove build artifacts.
 clean:
 	rm -rf $(BINARY) $(FRONTEND)/out $(FRONTEND)/.next
+
+demo-112:
+    helm upgrade --install flinkui deploy/helm/flinkui \
+    -n flink-jobs --create-namespace \
+    -f deploy/values-112.yaml

@@ -17,3 +17,5 @@
 .sa.kubeconfig
 
 .DS_Store
+
+deploy/values-*.yaml
