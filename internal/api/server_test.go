@@ -40,6 +40,9 @@ func (fakeAccessor) CountPods(_ context.Context, _ string) (int, error) { return
 func (fakeAccessor) PodLogs(_ context.Context, _, _ string, _ int64) (string, error) {
 	return "log line", nil
 }
+func (fakeAccessor) PodLogsForPod(_ context.Context, _, _, _ string, _ int64) (string, error) {
+	return "log line", nil
+}
 func (fakeAccessor) Exec(_ context.Context, _, _ string, _ []string) (*cluster.ExecResult, error) {
 	return &cluster.ExecResult{}, nil
 }

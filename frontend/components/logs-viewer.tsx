@@ -14,15 +14,34 @@ const COMPONENTS: { value: LogComponent; label: string }[] = [
 ];
 
 /** LogsViewer tails JobManager or TaskManager logs with adjustable tail size,
- *  a component switch, and a keyword filter (design §4.3). */
+ *  a component switch, an optional single-pod selector (useful when there are
+ *  multiple TaskManagers), and a keyword filter (design §4.3). */
 export function LogsViewer({ jobName }: { jobName: string }) {
   const [component, setComponent] = React.useState<LogComponent>("jobmanager");
+  const [pod, setPod] = React.useState<string>(""); // "" = all pods of the role
   const [tail, setTail] = React.useState(200);
   const [filter, setFilter] = React.useState("");
 
+  // Pod list for the current role, so the user can isolate a single instance.
+  // Reuses the cached job query the detail page already polls.
+  const job = useQuery({
+    queryKey: ["job", jobName],
+    queryFn: () => api.getJob(jobName),
+    enabled: !!jobName,
+  });
+  const rolePods = React.useMemo(
+    () => (job.data?.pods ?? []).filter((p) => p.component === component),
+    [job.data, component],
+  );
+
+  // If the selected pod is no longer present for the role, fall back to "all".
+  React.useEffect(() => {
+    if (pod && !rolePods.some((p) => p.name === pod)) setPod("");
+  }, [rolePods, pod]);
+
   const logs = useQuery({
-    queryKey: ["logs", jobName, component, tail],
-    queryFn: () => api.logs(jobName, tail, component),
+    queryKey: ["logs", jobName, component, pod, tail],
+    queryFn: () => api.logs(jobName, tail, component, pod),
   });
 
   const text = logs.data?.logs ?? "";
@@ -33,6 +52,8 @@ export function LogsViewer({ jobName }: { jobName: string }) {
     return all.filter((l) => l.toLowerCase().includes(f));
   }, [text, filter]);
 
+  const roleLabel = component === "taskmanager" ? "TaskManager" : "JobManager";
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -41,7 +62,10 @@ export function LogsViewer({ jobName }: { jobName: string }) {
             <button
               key={c.value}
               type="button"
-              onClick={() => setComponent(c.value)}
+              onClick={() => {
+                setComponent(c.value);
+                setPod(""); // reset instance selection when switching role
+              }}
               className={
                 "rounded px-3 py-1 text-sm transition-colors " +
                 (component === c.value
@@ -54,6 +78,21 @@ export function LogsViewer({ jobName }: { jobName: string }) {
             </button>
           ))}
         </div>
+        <select
+          className="h-9 max-w-[18rem] rounded-md border border-input bg-background px-2 text-sm"
+          value={pod}
+          onChange={(e) => setPod(e.target.value)}
+          aria-label="Pod instance"
+        >
+          <option value="">
+            All {roleLabel}s{rolePods.length ? ` (${rolePods.length})` : ""}
+          </option>
+          {rolePods.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}
+            </option>
+          ))}
+        </select>
         <label className="text-sm text-muted-foreground">Tail</label>
         <select
           className="h-9 rounded-md border border-input bg-background px-2 text-sm"
@@ -85,10 +124,7 @@ export function LogsViewer({ jobName }: { jobName: string }) {
       )}
 
       <pre className="max-h-[28rem] overflow-auto rounded-md bg-zinc-950 p-4 text-xs leading-relaxed text-zinc-100">
-        {logs.isLoading
-          ? "Loading logs…"
-          : lines.join("\n") ||
-            `No ${component === "taskmanager" ? "TaskManager" : "JobManager"} log output.`}
+        {logs.isLoading ? "Loading logs…" : lines.join("\n") || `No ${roleLabel} log output.`}
       </pre>
     </div>
   );

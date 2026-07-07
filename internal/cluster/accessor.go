@@ -67,6 +67,9 @@ type ClusterAccessor interface {
 	CountPods(ctx context.Context, labelSelector string) (int, error)
 	// PodLogs returns tailed logs across pods matching the selector.
 	PodLogs(ctx context.Context, labelSelector, container string, tailLines int64) (string, error)
+	// PodLogsForPod returns tailed logs for a single named pod, which must match
+	// the label selector (scoping the read to the deployment+component).
+	PodLogsForPod(ctx context.Context, labelSelector, podName, container string, tailLines int64) (string, error)
 
 	// Exec runs a command inside a container of a pod selected by labelSelector
 	// (first matching pod). Used to issue the JM REST savepoint call.

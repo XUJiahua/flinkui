@@ -16,12 +16,22 @@ type selectorCapturingAccessor struct {
 	lastSelector  string
 	lastContainer string
 	lastTail      int64
+	lastPod       string
 }
 
 func (a *selectorCapturingAccessor) PodLogs(_ context.Context, selector, container string, tail int64) (string, error) {
 	a.lastSelector = selector
 	a.lastContainer = container
 	a.lastTail = tail
+	a.lastPod = ""
+	return "line", nil
+}
+
+func (a *selectorCapturingAccessor) PodLogsForPod(_ context.Context, selector, pod, container string, tail int64) (string, error) {
+	a.lastSelector = selector
+	a.lastContainer = container
+	a.lastTail = tail
+	a.lastPod = pod
 	return "line", nil
 }
 
@@ -41,7 +51,7 @@ func TestLogsComponentSelector(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := svc.Logs(context.Background(), "demo", tt.component, 0); err != nil {
+			if _, err := svc.Logs(context.Background(), "demo", tt.component, "", 0); err != nil {
 				t.Fatalf("Logs: %v", err)
 			}
 			if acc.lastSelector != tt.wantSelector {
@@ -53,7 +63,30 @@ func TestLogsComponentSelector(t *testing.T) {
 			if acc.lastTail != 200 {
 				t.Errorf("tail = %d, want 200 (default from LogTailLines)", acc.lastTail)
 			}
+			if acc.lastPod != "" {
+				t.Errorf("pod = %q, want empty (all pods)", acc.lastPod)
+			}
 		})
+	}
+}
+
+// TestLogsSinglePod verifies that a non-empty pod routes to the pod-scoped fetch
+// with the component selector still applied (so the read stays scoped).
+func TestLogsSinglePod(t *testing.T) {
+	acc := &selectorCapturingAccessor{}
+	svc := NewService(acc, &config.Config{DeploymentPrefix: "flink-sql-job-", LogTailLines: 200})
+
+	if _, err := svc.Logs(context.Background(), "demo", "taskmanager", "flink-sql-job-demo-taskmanager-1-2", 500); err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	if acc.lastPod != "flink-sql-job-demo-taskmanager-1-2" {
+		t.Errorf("pod = %q, want the requested taskmanager pod", acc.lastPod)
+	}
+	if acc.lastSelector != "app=flink-sql-job-demo,component=taskmanager" {
+		t.Errorf("selector = %q, want the taskmanager selector", acc.lastSelector)
+	}
+	if acc.lastTail != 500 {
+		t.Errorf("tail = %d, want 500", acc.lastTail)
 	}
 }
 

@@ -235,21 +235,53 @@ func (k *KubeAccessor) PodLogs(ctx context.Context, labelSelector, container str
 	var buf bytes.Buffer
 	for i := range pods {
 		p := &pods[i]
-		opts := &corev1.PodLogOptions{TailLines: &tailLines}
-		if container != "" {
-			opts.Container = container
-		}
-		req := k.clientset.CoreV1().Pods(k.namespace).GetLogs(p.Name, opts)
-		stream, err := req.Stream(ctx)
-		if err != nil {
+		if err := k.streamPodLog(ctx, &buf, p.Name, container, tailLines); err != nil {
 			fmt.Fprintf(&buf, "==== %s (error: %v) ====\n", p.Name, err)
-			continue
 		}
-		fmt.Fprintf(&buf, "==== %s ====\n", p.Name)
-		_, _ = buf.ReadFrom(stream)
-		_ = stream.Close()
 	}
 	return buf.String(), nil
+}
+
+// PodLogsForPod returns logs for a single named pod. The pod must match the
+// given label selector so a caller cannot read arbitrary pods in the namespace
+// (the read stays scoped to the deployment + component).
+func (k *KubeAccessor) PodLogsForPod(ctx context.Context, labelSelector, podName, container string, tailLines int64) (string, error) {
+	pods, err := k.listPodObjects(ctx, labelSelector)
+	if err != nil {
+		return "", err
+	}
+	found := false
+	for i := range pods {
+		if pods[i].Name == podName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("pod %q does not match selector %q", podName, labelSelector)
+	}
+	var buf bytes.Buffer
+	if err := k.streamPodLog(ctx, &buf, podName, container, tailLines); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// streamPodLog writes a header and the tailed log stream of one pod into buf.
+func (k *KubeAccessor) streamPodLog(ctx context.Context, buf *bytes.Buffer, podName, container string, tailLines int64) error {
+	opts := &corev1.PodLogOptions{TailLines: &tailLines}
+	if container != "" {
+		opts.Container = container
+	}
+	req := k.clientset.CoreV1().Pods(k.namespace).GetLogs(podName, opts)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	fmt.Fprintf(buf, "==== %s ====\n", podName)
+	_, _ = buf.ReadFrom(stream)
+	return nil
 }
 
 func (k *KubeAccessor) Exec(ctx context.Context, labelSelector, container string, cmd []string) (*ExecResult, error) {

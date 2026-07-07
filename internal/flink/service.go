@@ -259,15 +259,20 @@ func (s *Service) Rollback(ctx context.Context, name, path string) error {
 	return s.acc.PatchFlinkDeployment(ctx, dep, patch)
 }
 
-// Logs tails JobManager or TaskManager logs across matching pods (design §4.3).
-// component selects the pod role ("jobmanager" or "taskmanager"); anything else
-// defaults to jobmanager.
-func (s *Service) Logs(ctx context.Context, name, component string, tail int64) (string, error) {
+// Logs tails JobManager or TaskManager logs (design §4.3). component selects the
+// pod role ("jobmanager" or "taskmanager"; anything else defaults to
+// jobmanager). When pod is non-empty only that pod's logs are returned (it must
+// belong to the deployment+component); otherwise logs from all matching pods are
+// concatenated with per-pod "==== <pod> ====" headers.
+func (s *Service) Logs(ctx context.Context, name, component, pod string, tail int64) (string, error) {
 	dep := s.cfg.DeploymentName(name)
 	if tail <= 0 {
 		tail = s.cfg.LogTailLines
 	}
 	selector := fmt.Sprintf("app=%s,component=%s", dep, normalizeComponent(component))
+	if pod != "" {
+		return s.acc.PodLogsForPod(ctx, selector, pod, "flink-main-container", tail)
+	}
 	return s.acc.PodLogs(ctx, selector, "flink-main-container", tail)
 }
 

@@ -41,11 +41,12 @@ func (h *Handlers) getJob(c *gin.Context) {
 	c.JSON(http.StatusOK, detail)
 }
 
-// getLogs handles GET /api/jobs/:name/logs?tail=N&component=jobmanager|taskmanager.
+// getLogs handles GET /api/jobs/:name/logs?tail=N&component=jobmanager|taskmanager&pod=<name>.
 func (h *Handlers) getLogs(c *gin.Context) {
 	tail, _ := strconv.ParseInt(c.DefaultQuery("tail", "0"), 10, 64)
 	component := c.DefaultQuery("component", "jobmanager")
-	logs, err := h.svc.Logs(c.Request.Context(), c.Param("name"), component, tail)
+	pod := c.Query("pod")
+	logs, err := h.svc.Logs(c.Request.Context(), c.Param("name"), component, pod, tail)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
