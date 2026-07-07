@@ -1,0 +1,116 @@
+# =============================================================================
+# 完整示例 values —— 复制本文件按需修改后使用：
+#
+#   helm upgrade --install flinkui deploy/helm/flinkui \
+#     -n flink-jobs --create-namespace \
+#     -f my-values.yaml
+#
+# 相比 values-example.yaml（示例集群最小配置），本文件覆盖了更多常见场景：
+# 镜像/拉取密钥、Ingress、已存在的 Secret、资源与调度等。仅列出你可能要改的项，
+# 其余保持 chart 默认即可（完整默认见 values.yaml）。
+# =============================================================================
+
+replicaCount: 1
+
+image:
+  repository: docker.io/johnxu1989/flinkui
+  # 留空则用 Chart.appVersion；生产建议固定到具体版本。
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# 私有镜像仓库时配置拉取密钥（先 kubectl create secret docker-registry ...）。
+imagePullSecrets: []
+#  - name: my-registry-cred
+
+# -- 控制台 / 目标集群配置（映射到 FKO_* 环境变量） -------------------------
+config:
+  addr: ":8080"
+  # 大盘上展示的集群名。
+  clusterName: "prod"
+  # 存放 FlinkDeployment 的 namespace（RBAC 会建到这里）。留空则用 release namespace。
+  targetNamespace: "flink-jobs"
+  # FlinkDeployment 命名规则前缀：deployment = 前缀 + 作业名。
+  deploymentPrefix: "flink-sql-job-"
+  savepointTimeoutSec: 120
+  stopTimeoutSec: 120
+  logTailLines: 200
+  statusPollSec: 5
+
+# -- 鉴权（必填） -----------------------------------------------------------
+# 二选一：
+#  A) 由 chart 创建 Secret：填写 password 和 sessionSecret（可用 --set 传入，避免落盘明文）。
+#  B) 使用已存在的 Secret：设置 existingSecret（需含 username / password / session-secret 三个 key）。
+auth:
+  username: "admin"
+  # 方式 A（建议用 --set 覆盖，不要提交明文到仓库）：
+  password: ""            # --set auth.password='<强密码>'
+  sessionSecret: ""       # --set auth.sessionSecret="$(openssl rand -hex 16)"
+  # 方式 B：
+  existingSecret: ""      # 例如 "flink-console-auth"
+
+# -- S3 / MinIO（回滚恢复点选择器，可选） -----------------------------------
+s3:
+  enabled: true
+  # 指向 MinIO 的 S3 API 端口（通常 9000），不是 Web 控制台端口。
+  # 集群内可直接用 Service 名。
+  endpoint: "https://minio.flink-operator:9000"
+  # 可选兜底 bucket；通常无需填写——恢复点路径会从每个作业的
+  # state.savepoints.dir / state.checkpoints.dir 读取。
+  bucket: ""
+  region: "us-east-1"
+  pathStyle: true          # MinIO 用 path-style
+  insecure: true           # 自签证书时跳过 TLS 校验
+  # 二选一：
+  accessKey: ""            # --set s3.accessKey=minioadmin
+  secretKey: ""            # --set s3.secretKey=minioadmin
+  existingSecret: ""       # 或使用已存在 Secret（含 access-key / secret-key）
+
+# -- 额外的原生 FKO_* 环境变量（高级/兜底） ---------------------------------
+extraEnv: []
+#  - name: FKO_STATUS_POLL_SEC
+#    value: "3"
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # 例如给 SA 绑定云厂商 IAM（IRSA 等）时在此加注解。
+
+rbac:
+  create: true
+
+# -- 暴露方式 ---------------------------------------------------------------
+service:
+  type: ClusterIP        # 或 NodePort / LoadBalancer
+  port: 80
+
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"  # WebSocket 长连接建议调大
+  hosts:
+    - host: flinkui.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: flinkui-tls
+    #   hosts:
+    #     - flinkui.example.com
+
+# -- 资源与调度 -------------------------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podLabels: {}

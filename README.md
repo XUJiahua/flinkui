@@ -204,7 +204,10 @@ Key values (see [`values.yaml`](deploy/helm/flinkui/values.yaml) for all):
 | `service.type` / `ingress.enabled` | `ClusterIP` / `false` | exposure |
 
 An example values file for the sample cluster is at
-[`deploy/helm/flinkui/values-example.yaml`](deploy/helm/flinkui/values-example.yaml).
+[`deploy/helm/flinkui/values-example.yaml`](deploy/helm/flinkui/values-example.yaml);
+a fully-annotated example covering ingress, existing secrets, resources and
+scheduling is at
+[`deploy/helm/flinkui/values-example-full.yaml`](deploy/helm/flinkui/values-example-full.yaml).
 
 ## Test
 
