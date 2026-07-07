@@ -62,6 +62,11 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.S
 		api.GET("/ha-groups/:name", h.getHAGroup)
 		api.GET("/ha-groups/:name/fencing", h.getHAGroupFencing)
 		api.GET("/ha-groups/:name/recovery-points", h.getHAGroupRecoveryPoints)
+
+		// HA manual switch (failover P1b). High-risk: body must confirm.
+		api.POST("/ha-groups/:name/failover", h.haFailover)
+		api.POST("/ha-groups/:name/failback", h.haFailback)
+		api.GET("/switch-tasks/:id", h.getSwitchTask)
 	}
 
 	// WebSocket status stream (auth handled inside via cookie).
