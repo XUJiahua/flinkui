@@ -21,15 +21,17 @@ type Service struct {
 	mu      sync.Mutex
 	fencing map[string]*store.FencingStore // key: group name
 	recov   map[string]*store.Store        // key: group name (recovery-point lister)
+	switches *switchStore
 }
 
 // NewService builds the failover service.
 func NewService(cfg *config.Config, reg *cluster.Registry) *Service {
 	return &Service{
-		cfg:     cfg,
-		reg:     reg,
-		fencing: map[string]*store.FencingStore{},
-		recov:   map[string]*store.Store{},
+		cfg:      cfg,
+		reg:      reg,
+		fencing:  map[string]*store.FencingStore{},
+		recov:    map[string]*store.Store{},
+		switches: newSwitchStore(),
 	}
 }
 
