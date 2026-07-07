@@ -47,6 +47,37 @@ type AuthConfig struct {
 	SessionSecret string `mapstructure:"session_secret"`
 }
 
+// SideConfig identifies one side (primary or standby) of an HA group: which
+// named cluster, namespace, deployment, and the fencing clusterId written to
+// the S3 token (design failover §3/§4).
+type SideConfig struct {
+	Cluster    string `mapstructure:"cluster"`
+	Namespace  string `mapstructure:"namespace"`
+	Deployment string `mapstructure:"deployment"`
+	ClusterID  string `mapstructure:"cluster_id"`
+}
+
+// HAGroupConfig statically declares a primary/standby pair of the same logical
+// job across two sides sharing one S3 (checkpoints/savepoints/fencing).
+type HAGroupConfig struct {
+	Name string `mapstructure:"name"`
+	// S3Cluster names the cluster whose S3 config is used to read/write the
+	// fencing token and list recovery points (both sides share the same S3).
+	S3Cluster string `mapstructure:"s3_cluster"`
+	// FencingKey is the S3 object key of the active-cluster token.
+	FencingKey string `mapstructure:"fencing_key"`
+	// NeutralToken fences both sides during a switch transition.
+	NeutralToken string     `mapstructure:"neutral_token"`
+	Primary      SideConfig `mapstructure:"primary"`
+	Standby      SideConfig `mapstructure:"standby"`
+}
+
+// Default fencing settings mirroring scripts/failover.sh.
+const (
+	DefaultFencingKey   = "fencing/active-cluster"
+	DefaultNeutralToken = "__switching__"
+)
+
 // Config is the top-level platform configuration.
 type Config struct {
 	// Addr is the HTTP listen address, e.g. ":8080".
@@ -66,6 +97,12 @@ type Config struct {
 
 	Auth    AuthConfig    `mapstructure:"auth"`
 	Cluster ClusterConfig `mapstructure:"cluster"`
+
+	// Clusters is a named pool of clusters for multi-cluster / failover use.
+	// Each entry carries its own kubeconfig (empty => in-cluster) and S3 config.
+	Clusters map[string]ClusterConfig `mapstructure:"clusters"`
+	// HAGroups statically declares primary/standby pairs (design failover P1).
+	HAGroups []HAGroupConfig `mapstructure:"ha_groups"`
 }
 
 // Load reads configuration from env vars (prefix FKO_) and an optional file.
@@ -119,7 +156,39 @@ func Load(configFile string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	// Apply fencing defaults per HA group (mirrors scripts/failover.sh).
+	for i := range cfg.HAGroups {
+		if cfg.HAGroups[i].FencingKey == "" {
+			cfg.HAGroups[i].FencingKey = DefaultFencingKey
+		}
+		if cfg.HAGroups[i].NeutralToken == "" {
+			cfg.HAGroups[i].NeutralToken = DefaultNeutralToken
+		}
+	}
 	return &cfg, nil
+}
+
+// ClusterByName returns a named cluster from the pool. It also resolves the
+// implicit single-cluster config under its Name (or "default"/"local").
+func (c *Config) ClusterByName(name string) (ClusterConfig, bool) {
+	if cc, ok := c.Clusters[name]; ok {
+		return cc, true
+	}
+	// Fall back to the implicit single cluster.
+	if name == c.Cluster.Name || name == "default" || name == "local" || name == "" {
+		return c.Cluster, true
+	}
+	return ClusterConfig{}, false
+}
+
+// HAGroupByName returns a declared HA group by name.
+func (c *Config) HAGroupByName(name string) (HAGroupConfig, bool) {
+	for _, g := range c.HAGroups {
+		if g.Name == name {
+			return g, true
+		}
+	}
+	return HAGroupConfig{}, false
 }
 
 // DeploymentName maps a short job name to its FlinkDeployment resource name.
