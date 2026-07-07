@@ -13,6 +13,7 @@ import (
 	"github.com/fko-demo/flinkui/internal/auth"
 	"github.com/fko-demo/flinkui/internal/cluster"
 	"github.com/fko-demo/flinkui/internal/config"
+	"github.com/fko-demo/flinkui/internal/failover"
 	"github.com/fko-demo/flinkui/internal/flink"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/fko-demo/flinkui/web"
@@ -80,13 +81,31 @@ func main() {
 		log.Printf("WARNING: auth password is empty; set FKO_AUTH_PASSWORD to secure the platform")
 	}
 
+	// Decentralized HA (failover-decentralized). Enabled when HA groups are
+	// declared; needs the shared S3 for the fencing token + handoff record.
+	var fo *failover.Service
+	if len(cfg.HA.Groups) > 0 {
+		var coord *store.Coord
+		if cfg.Cluster.S3.Endpoint != "" || cfg.Cluster.S3.AccessKey != "" {
+			coord, err = store.NewCoord(context.Background(), cfg.Cluster.S3)
+			if err != nil {
+				log.Printf("warning: HA coordination (S3) disabled: %v", err)
+				coord = nil
+			}
+		} else {
+			log.Printf("warning: HA declared but S3 not configured; fencing/handoff unavailable")
+		}
+		fo = failover.NewService(cfg, coord, st)
+		log.Printf("decentralized HA enabled: %d group(s)", len(cfg.HA.Groups))
+	}
+
 	// Embedded frontend rooted at web/dist.
 	staticFS, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
 		log.Fatalf("mount embedded frontend: %v", err)
 	}
 
-	srv := api.New(cfg, svc, st, a, staticFS)
+	srv := api.New(cfg, svc, st, fo, a, staticFS)
 	log.Printf("Flink job console %s listening on %s (cluster=%s namespace=%s)",
 		version, cfg.Addr, cfg.Cluster.Name, cfg.Cluster.Namespace)
 	if err := srv.Run(); err != nil {
