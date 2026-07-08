@@ -42,6 +42,31 @@ k8s 调用：
   ```
   `epoch` 单调递增，用于防旧主 flapping 抢回、以及并发 Promote 竞态判定。
 
+### 3.1 两者分工，以及为什么 `failover.sh` 用不到交接记录
+
+| 对象 | 内容 | 作用 | 集中式 `failover.sh` |
+|------|------|------|----------------------|
+| **fencing token** | 一个 clusterId(或中性值) | 防脑裂的"谁能跑"——作业 Pod 的 fencing initContainer 也校验它 | ✅ 用到(唯一需要的) |
+| **交接记录 handoff**(`handoff_key`) | epoch / phase / recoveryPoint / releasedBy | 去中心两侧之间的"交接留言" | ❌ 用不到 |
+
+`failover.sh` 是**集中式、单进程**:一个脚本在一次运行里顺序完成"停源→选恢复点→起目标"。
+所以恢复点路径是**内存变量**、"源侧已停"是**隐式**的、先后顺序**天然串行**——只需一个 fencing
+token 防脑裂即可,别的都在进程内存里。
+
+去中心模式把切换拆成**两个独立半操作**,跑在**互相连不通 k8s** 的两个 flinkui 上(A 做
+Release、B 做 Promote),它俩**只能靠共享 S3 通信**。此时"进程内存里的东西"传不过去,bare
+token(只是个 clusterId 字符串)也装不下,于是需要交接记录携带三样 token 装不下的信息:
+
+1. **recoveryPoint(最关键)**:A 侧 savepoint 的 location 写入记录,B 侧读它做**零丢失**恢复;
+   没有它 B 只能退回**最新 checkpoint**(丢失 ≤ checkpoint 间隔)。跨两侧传"零丢失恢复点"必须靠它。
+2. **phase / releasedBy**:B 的**普通 Promote** 校验 `phase==released`(确认对端已干净让位)才接管;
+   否则需 **force**(灾难,附数据丢失确认)。token 的中性值只能表达"切换中",表达不了"谁已让位"。
+3. **epoch**:给多次 Promote 排序,防旧主 flapping 抢回 + 两侧并发 Promote 竞态(epoch 高者胜)。
+   单进程脚本天然串行,不需要;两个独立执行者才需要这个排序令牌。
+
+一句话:**token = "谁能跑"(两模式都用);handoff = 去中心两侧的"交接留言"(恢复点/是否已让位/epoch)**。
+`handoff_key` 就是这条留言在共享 S3 上的对象键,默认 `fencing/handoff/<组名>`,一般不用改。
+
 ## 4. 两个本地半操作（状态机）
 
 **Release（我在跑 → 让位），全在本地：**

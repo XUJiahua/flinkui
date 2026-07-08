@@ -215,6 +215,14 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 交接记录（epoch/phase/recoveryPoint）、**对端标注"未观测（跨集群）"**、以及本地不一致告警
 （如 token 指向对端但本地在跑 = 脑裂风险）。
 
+> **fencing token vs 交接记录(handoff)**:共享 S3 上有两个对象。
+> **fencing token**(`fencingKey`,默认 `fencing/active-cluster`)= 一个 clusterId,表示"谁能跑",
+> 作业 Pod 的 fencing initContainer 也校验它。**交接记录**(`handoffKey`,默认 `fencing/handoff/<组名>`)
+> = 一段 JSON(epoch/phase/recoveryPoint/releasedBy),是去中心两侧之间的"交接留言"——因为 A 做
+> Release、B 做 Promote 是**两个连不通对端的独立操作**,B 必须从这里读到 A 的**恢复点**(零丢失
+> savepoint 路径)、是否**已让位**(phase=released,普通 Promote 的前提)、以及 **epoch**(防旧主抢回/
+> 并发竞态)。集中式 `failover.sh` 是单进程串行,这些都在内存里,故只用 token、不需要交接记录。
+
 ### 7.3 冷启动 / 初始化 fencing token
 
 全新部署时 fencing token 从未写过（`token → unset`），若主侧作业已在跑，HA 页会提示
