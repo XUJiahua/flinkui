@@ -26,17 +26,19 @@ const (
 
 // Auth holds credentials and the signing secret.
 type Auth struct {
-	username string
-	password string
-	secret   []byte
+	username     string
+	password     string
+	secret       []byte
+	cookieSecure bool
 }
 
 // New builds an Auth from config.
 func New(cfg config.AuthConfig) *Auth {
 	return &Auth{
-		username: cfg.Username,
-		password: cfg.Password,
-		secret:   []byte(cfg.SessionSecret),
+		username:     cfg.Username,
+		password:     cfg.Password,
+		secret:       []byte(cfg.SessionSecret),
+		cookieSecure: cfg.CookieSecure,
 	}
 }
 
@@ -90,16 +92,17 @@ func (a *Auth) Login(c *gin.Context) {
 	exp := time.Now().Add(sessionMaxAge).Unix()
 	token := a.sign(req.Username, exp)
 	// SameSite=Lax mitigates CSRF on the state-changing POST endpoints while
-	// keeping the same-origin SPA fully functional.
+	// keeping the same-origin SPA fully functional. Secure follows the deploy
+	// protocol via FKO_AUTH_COOKIE_SECURE (enable behind TLS).
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(cookieName, token, int(sessionMaxAge.Seconds()), "/", "", false, true)
+	c.SetCookie(cookieName, token, int(sessionMaxAge.Seconds()), "/", "", a.cookieSecure, true)
 	c.JSON(http.StatusOK, gin.H{"username": req.Username})
 }
 
 // Logout clears the session cookie.
 func (a *Auth) Logout(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(cookieName, "", -1, "/", "", false, true)
+	c.SetCookie(cookieName, "", -1, "/", "", a.cookieSecure, true)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

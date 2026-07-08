@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/fko-demo/flinkui/internal/auth"
@@ -22,15 +24,46 @@ func newStatusHub(h *Handlers, a *auth.Auth, pollSec int) *statusHub {
 	if pollSec <= 0 {
 		pollSec = 5
 	}
+	allowed := h.cfg.AllowedOriginList()
 	return &statusHub{
 		h:        h,
 		auth:     a,
 		interval: time.Duration(pollSec) * time.Second,
 		upgrader: websocket.Upgrader{
-			// Same-origin in the single-binary deployment; allow all for dev.
-			CheckOrigin: func(r *http.Request) bool { return true },
+			// Reject cross-origin WebSocket upgrades: only same-origin (the
+			// embedded SPA) plus any explicitly allow-listed origins may connect.
+			// This closes the CSRF/cross-site WS hijack surface that a blanket
+			// "return true" leaves open.
+			CheckOrigin: func(r *http.Request) bool { return originAllowed(r, allowed) },
 		},
 	}
+}
+
+// originAllowed reports whether a WebSocket upgrade request's Origin is trusted.
+// A missing Origin (non-browser client) is allowed; a browser Origin must match
+// the request Host (same-origin) or an entry in the configured allowlist.
+func originAllowed(r *http.Request, allowed []string) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // non-browser client (no Origin header)
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	// Same-origin: the Origin host must equal the request Host.
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	lowered := strings.ToLower(origin)
+	loweredHost := strings.ToLower(u.Host)
+	for _, a := range allowed {
+		// Match either the full "scheme://host[:port]" or just the host.
+		if a == lowered || a == loweredHost {
+			return true
+		}
+	}
+	return false
 }
 
 // handle upgrades to WebSocket and streams job summaries until the client leaves.

@@ -45,6 +45,11 @@ type AuthConfig struct {
 	Password string `mapstructure:"password"`
 	// SessionSecret signs session cookies.
 	SessionSecret string `mapstructure:"session_secret"`
+	// CookieSecure sets the Secure attribute on the session cookie so it is only
+	// sent over HTTPS. Enable this whenever the console is served over TLS
+	// (e.g. behind an ingress terminating TLS). Default false to keep plain-HTTP
+	// local/dev usable.
+	CookieSecure bool `mapstructure:"cookie_secure"`
 }
 
 // LocalHAGroup declares one decentralized HA group from THIS instance's point of
@@ -93,6 +98,12 @@ type Config struct {
 	// StatusPollSec controls the WebSocket status push interval.
 	StatusPollSec int `mapstructure:"status_poll_sec"`
 
+	// AllowedOrigins is a comma-separated allowlist of extra browser origins
+	// (scheme://host[:port]) permitted to open the status WebSocket, in addition
+	// to same-origin requests which are always allowed. Set this when the SPA is
+	// served from a different origin than the API (e.g. a separate dev host).
+	AllowedOrigins string `mapstructure:"allowed_origins"`
+
 	Auth    AuthConfig    `mapstructure:"auth"`
 	Cluster ClusterConfig `mapstructure:"cluster"`
 
@@ -131,12 +142,12 @@ func Load(configFile string) (*Config, error) {
 	// FKO_CLUSTER_KUBECONFIG and FKO_AUTH_PASSWORD take effect.
 	for _, key := range []string{
 		"addr", "deployment_prefix", "savepoint_timeout_sec", "stop_timeout_sec",
-		"log_tail_lines", "status_poll_sec",
+		"log_tail_lines", "status_poll_sec", "allowed_origins",
 		"cluster.name", "cluster.namespace", "cluster.kubeconfig", "cluster.context",
 		"cluster.s3.endpoint", "cluster.s3.bucket", "cluster.s3.access_key",
 		"cluster.s3.secret_key", "cluster.s3.region", "cluster.s3.path_style",
 		"cluster.s3.insecure",
-		"auth.username", "auth.password", "auth.session_secret",
+		"auth.username", "auth.password", "auth.session_secret", "auth.cookie_secure",
 	} {
 		_ = v.BindEnv(key)
 	}
@@ -167,6 +178,18 @@ func Load(configFile string) (*Config, error) {
 		}
 	}
 	return &cfg, nil
+}
+
+// AllowedOriginList parses the comma-separated AllowedOrigins into a trimmed,
+// lower-cased slice (empty entries dropped).
+func (c *Config) AllowedOriginList() []string {
+	var out []string
+	for _, o := range strings.Split(c.AllowedOrigins, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out = append(out, strings.ToLower(o))
+		}
+	}
+	return out
 }
 
 // HAGroupByName returns a declared local HA group by name.
