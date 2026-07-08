@@ -21,6 +21,9 @@ cluster:
   s3:
     endpoint: "https://minio.flink-operator:9000"   # S3 API port (shared store)
     bucket: flink
+    # Optional base path to isolate this instance in a shared bucket. Either set
+    # bucket to "flink/tenant-a", or keep bucket and add: prefix: tenant-a
+    # prefix: ""
     access_key: minioadmin
     secret_key: minioadmin
     path_style: true

@@ -9,7 +9,7 @@
 
 image:
   repository: docker.io/johnxu1989/flinkui
-  tag: "0.2.4"
+  tag: "0.2.5"
 
 config:
   clusterName: "k3s"
@@ -24,6 +24,10 @@ s3:
   enabled: true
   # In-cluster S3 API service (NOT the console port). Reached directly in-cluster.
   endpoint: "https://minio.flink-operator:9000"
+  # Optional: share one bucket across instances, isolated by path. Either set
+  # bucket to "flink/tenant-a", or keep bucket and add prefix: "tenant-a".
+  # bucket: "flink"
+  # prefix: "tenant-a"
   region: "us-east-1"
   pathStyle: true
   insecure: true # self-signed MinIO cert

@@ -15,7 +15,7 @@ replicaCount: 1
 image:
   repository: docker.io/johnxu1989/flinkui
   # 留空则用 Chart.appVersion；生产建议固定到具体版本。
-  tag: "0.2.4"
+  tag: "0.2.5"
   pullPolicy: IfNotPresent
 
 # 私有镜像仓库时配置拉取密钥（先 kubectl create secret docker-registry ...）。
@@ -57,6 +57,11 @@ s3:
   # 可选兜底 bucket；通常无需填写——恢复点路径会从每个作业的
   # state.savepoints.dir / state.checkpoints.dir 读取。
   bucket: ""
+  # 可选：桶内的基础路径前缀，用于多实例共用一个 bucket 时按路径隔离
+  #（如 "tenant-a" => 键写在 tenant-a/... 下）。也可直接写在 bucket 上
+  #（"flink/tenant-a"），两者会合并。仅影响 flinkui 自身的键
+  #（fencing/handoff 及兜底 savepoint/checkpoint 路径）。
+  prefix: ""
   region: "us-east-1"
   pathStyle: true          # MinIO 用 path-style
   insecure: true           # 自签证书时跳过 TLS 校验
