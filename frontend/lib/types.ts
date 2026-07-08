@@ -70,6 +70,34 @@ export interface SavepointResult {
   location: string;
 }
 
+// JobMetrics mirrors internal/flink.JobMetrics: a compact job-internal snapshot
+// pulled from the JobManager REST API (design backlog P2-1).
+export interface CheckpointStats {
+  completed: number;
+  failed: number;
+  inProgress: number;
+  total: number;
+  restored: number;
+  lastSizeBytes: number;
+  lastDurationMs: number;
+  lastTimestampMs: number;
+  lastExternalPath?: string;
+}
+
+export interface JobMetrics {
+  jobId: string;
+  name: string;
+  state: string;
+  durationMs: number;
+  vertices: number;
+  parallelism: number;
+  readRecords: number;
+  writeRecords: number;
+  readBytes: number;
+  writeBytes: number;
+  checkpoints?: CheckpointStats;
+}
+
 export type OperationType = "savepoint" | "restart";
 export type OperationStatus = "running" | "succeeded" | "failed";
 

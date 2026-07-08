@@ -5,6 +5,7 @@ import type {
   ClusterInfo,
   HATask,
   JobDetail,
+  JobMetrics,
   JobSummary,
   LocalView,
   LogComponent,
@@ -64,6 +65,8 @@ export const api = {
       `/api/jobs/${encodeURIComponent(name)}/logs?tail=${tail}&component=${component}` +
         (pod ? `&pod=${encodeURIComponent(pod)}` : ""),
     ),
+  metrics: (name: string) =>
+    request<JobMetrics>(`/api/jobs/${encodeURIComponent(name)}/metrics`),
   recoveryPoints: (name: string) =>
     request<{ recoveryPoints: RecoveryPoint[] }>(
       `/api/jobs/${encodeURIComponent(name)}/recovery-points`,

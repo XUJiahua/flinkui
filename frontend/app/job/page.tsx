@@ -96,6 +96,8 @@ function JobDetail({ name }: { name: string }) {
           </CardContent>
         </Card>
 
+        <MetricsCard name={name} enabled={d?.health === "healthy" || d?.jobState === "RUNNING"} />
+
         <Card>
           <CardHeader>
             <CardTitle>Pods</CardTitle>
@@ -178,6 +180,103 @@ function Field({ label, value, mono }: { label: string; value?: string; mono?: b
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className={mono ? "break-all font-mono text-xs" : "font-medium"}>{value || "—"}</dd>
     </div>
+  );
+}
+
+/** formatBytes renders a byte count in human units (base 1024). */
+function formatBytes(n: number): string {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1);
+  return `${(n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+/** formatDuration renders a millisecond duration compactly (e.g. "1h 3m"). */
+function formatDuration(ms: number): string {
+  if (ms <= 0) return "—";
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function formatNumber(n: number): string {
+  return n.toLocaleString();
+}
+
+/** MetricsCard shows a compact job-internal metrics snapshot (state/uptime,
+ *  aggregate throughput counters, checkpoint health) from the JobManager REST
+ *  API. It only queries when the job is plausibly running to avoid noisy
+ *  "job not running" errors (design backlog P2-1). */
+function MetricsCard({ name, enabled }: { name: string; enabled?: boolean }) {
+  const q = useQuery({
+    queryKey: ["metrics", name],
+    queryFn: () => api.metrics(name),
+    refetchInterval: 5000,
+    enabled: !!name && !!enabled,
+    retry: false,
+  });
+
+  const m = q.data;
+  const cp = m?.checkpoints;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Metrics</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!enabled ? (
+          <p className="py-4 text-sm text-muted-foreground">Job is not running; no live metrics.</p>
+        ) : q.isError ? (
+          <p className="py-4 text-sm text-muted-foreground">
+            {q.error instanceof ApiError ? q.error.message : "metrics unavailable"}
+          </p>
+        ) : !m ? (
+          <p className="py-4 text-sm text-muted-foreground">Loading metrics…</p>
+        ) : (
+          <div className="space-y-4">
+            <dl className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+              <Field label="State" value={m.state} />
+              <Field label="Uptime" value={formatDuration(m.durationMs)} />
+              <Field label="Operators" value={String(m.vertices)} />
+              <Field label="Total Parallelism" value={String(m.parallelism)} />
+              <Field label="Records In" value={formatNumber(m.readRecords)} />
+              <Field label="Records Out" value={formatNumber(m.writeRecords)} />
+              <Field label="Bytes In" value={formatBytes(m.readBytes)} />
+              <Field label="Bytes Out" value={formatBytes(m.writeBytes)} />
+            </dl>
+            <div>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Checkpoints</p>
+              {!cp ? (
+                <p className="text-sm text-muted-foreground">Checkpointing not available.</p>
+              ) : (
+                <dl className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+                  <Field label="Completed" value={formatNumber(cp.completed)} />
+                  <Field label="Failed" value={formatNumber(cp.failed)} />
+                  <Field label="In Progress" value={formatNumber(cp.inProgress)} />
+                  <Field label="Restored" value={formatNumber(cp.restored)} />
+                  <Field label="Last Size" value={cp.lastSizeBytes ? formatBytes(cp.lastSizeBytes) : "—"} />
+                  <Field
+                    label="Last Duration"
+                    value={cp.lastDurationMs ? formatDuration(cp.lastDurationMs) : "—"}
+                  />
+                  <Field
+                    label="Last Checkpoint"
+                    value={cp.lastTimestampMs ? new Date(cp.lastTimestampMs).toLocaleString() : "—"}
+                  />
+                </dl>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

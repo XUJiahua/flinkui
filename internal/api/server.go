@@ -46,6 +46,7 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.S
 		api.GET("/jobs", h.listJobs)
 		api.GET("/jobs/:name", h.getJob)
 		api.GET("/jobs/:name/logs", h.getLogs)
+		api.GET("/jobs/:name/metrics", h.getMetrics)
 		api.GET("/jobs/:name/recovery-points", h.recoveryPoints)
 		api.GET("/jobs/:name/flink-ui", h.flinkUIInfo)
 		api.Any("/jobs/:name/ui/*path", h.flinkUIProxy)

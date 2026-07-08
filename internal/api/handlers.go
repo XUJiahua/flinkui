@@ -135,6 +135,18 @@ func (h *Handlers) recoveryPoints(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"recoveryPoints": points})
 }
 
+// getMetrics handles GET /api/jobs/:name/metrics: a compact job-internal
+// metrics snapshot (state/uptime, aggregate I/O counters, checkpoint health)
+// pulled from the JobManager REST API (design backlog P2-1).
+func (h *Handlers) getMetrics(c *gin.Context) {
+	m, err := h.svc.Metrics(c.Request.Context(), c.Param("name"))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, m)
+}
+
 // clusterInfo handles GET /api/cluster.
 func (h *Handlers) clusterInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
