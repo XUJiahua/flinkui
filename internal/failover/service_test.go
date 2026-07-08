@@ -2,6 +2,7 @@ package failover
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/fko-demo/flinkui/internal/config"
@@ -70,8 +71,32 @@ func TestDeriveRole(t *testing.T) {
 	}
 }
 
-func TestStatePatchJSON(t *testing.T) {
-	var m map[string]any
+// TestDeriveRoleSuspendedOwner verifies that when this side owns the group
+// (token=self) but the local job was plainly suspended, the warning steers the
+// operator to Resume rather than Promote.
+func TestDeriveRoleSuspendedOwner(t *testing.T) {
+	s := &Service{}
+	g := grp()
+	v := &LocalView{
+		Local: &flink.JobDetail{JobSummary: flink.JobSummary{
+			StatusText: "SUSPENDED/—", Healthy: false, Reachable: true,
+			DesiredState: "suspended", Health: flink.HealthSuspended,
+		}},
+		Fencing: FencingState{Token: "cluster-a", PointsTo: PointsSelf},
+	}
+	s.deriveRole(v, g)
+	if v.Role != RoleActive {
+		t.Fatalf("Role = %q, want active", v.Role)
+	}
+	if !strings.Contains(v.Warning, "Resume") {
+		t.Errorf("warning should mention Resume, got %q", v.Warning)
+	}
+	if !strings.Contains(v.Warning, "Promote does not apply") {
+		t.Errorf("warning should clarify Promote does not apply, got %q", v.Warning)
+	}
+}
+
+func TestStatePatchJSON(t *testing.T) {	var m map[string]any
 	json.Unmarshal(statePatchJSON("suspended", "", 0), &m)
 	job := m["spec"].(map[string]any)["job"].(map[string]any)
 	if job["state"] != "suspended" {

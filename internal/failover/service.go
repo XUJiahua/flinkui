@@ -233,7 +233,15 @@ func (s *Service) deriveRole(v *LocalView, g config.LocalHAGroup) {
 	case PointsSelf:
 		v.Role = RoleActive
 		if !localRunning {
-			v.Warning = "fencing token points here but the local job is not RUNNING/STABLE (consider Promote/Resume)"
+			if v.Local != nil && (v.Local.DesiredState == "suspended" || v.Local.Health == flink.HealthSuspended) {
+				// A plain Jobs-page Suspend stops the local job without touching
+				// the fencing token/handoff, so this side still owns the group.
+				// The fix is Resume, not Promote (Promote takes over a peer that
+				// has Released; nothing here has been released).
+				v.Warning = "this side already owns the group but its local job is suspended — Resume it on the Jobs page. This is a local suspend, not a failover: Promote does not apply."
+			} else {
+				v.Warning = "fencing token points here but the local job is not RUNNING/STABLE — Resume/Restart it on the Jobs page (Promote is only for taking over a peer that has Released)"
+			}
 		}
 	case PointsPeer:
 		v.Role = RoleStandby

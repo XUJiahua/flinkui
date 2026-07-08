@@ -58,8 +58,13 @@ function GroupCard({ view }: { view: LocalView }) {
   const [wizard, setWizard] = React.useState<null | "release" | "promote">(null);
   const [claiming, setClaiming] = React.useState(false);
   const [claimErr, setClaimErr] = React.useState("");
+  const [resuming, setResuming] = React.useState(false);
   const localRunning = !!view.local?.healthy;
   const tokenUnset = view.fencing.pointsTo === "unset";
+  const isActive = view.role === "active";
+  // This side owns the group but its local job is stopped (typically a plain
+  // Jobs-page Suspend). The fix is Resume, not Promote.
+  const ownedButStopped = isActive && !localRunning;
 
   const onClaim = async () => {
     if (!window.confirm(`Initialize the fencing token to ${view.clusterId} (mark this side active)? This does not restart the job.`)) {
@@ -77,6 +82,20 @@ function GroupCard({ view }: { view: LocalView }) {
     }
   };
 
+  const onResume = async () => {
+    setResuming(true);
+    setClaimErr("");
+    try {
+      await api.resume(view.deployment);
+      qc.invalidateQueries({ queryKey: ["ha"] });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    } catch (e) {
+      setClaimErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setResuming(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -91,10 +110,25 @@ function GroupCard({ view }: { view: LocalView }) {
               {claiming ? "Initializing…" : "Initialize (claim active)"}
             </Button>
           )}
+          {ownedButStopped && (
+            <Button size="sm" variant="default" disabled={resuming} onClick={onResume}>
+              {resuming ? "Resuming…" : "Resume local job"}
+            </Button>
+          )}
           <Button size="sm" variant="outline" disabled={!localRunning} onClick={() => setWizard("release")}>
             Release (step down)
           </Button>
-          <Button size="sm" variant="destructive" onClick={() => setWizard("promote")}>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={isActive}
+            title={
+              isActive
+                ? "This side already owns the group; Promote is for taking over a peer that has Released. To restart a suspended local job, use Resume."
+                : undefined
+            }
+            onClick={() => setWizard("promote")}
+          >
             Promote (take over)
           </Button>
         </div>
