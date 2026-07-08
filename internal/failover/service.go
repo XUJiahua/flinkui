@@ -3,6 +3,7 @@ package failover
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/fko-demo/flinkui/internal/cluster"
@@ -99,6 +100,9 @@ func (s *Service) groupConfigs(ctx context.Context) []config.LocalHAGroup {
 			}
 		}
 	}
+	// Stable order by name, matching the Jobs dashboard (avoids random reshuffle
+	// on refresh, esp. with auto_all whose listing order is not guaranteed).
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
