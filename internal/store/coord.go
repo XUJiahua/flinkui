@@ -63,7 +63,13 @@ func NewCoord(ctx context.Context, cfg config.S3Config) (*Coord, error) {
 	return &Coord{client: client, bucket: cfg.Bucket}, nil
 }
 
-func (c *Coord) getObject(ctx context.Context, key string) ([]byte, bool, error) {
+// ErrHandoffConflict is returned by conditional handoff writes when the object
+// changed underneath us (S3 returned 412 Precondition Failed). It signals a lost
+// race — e.g. the peer promoted at the same instant — and must abort the switch
+// rather than blindly overwrite.
+var ErrHandoffConflict = errors.New("handoff record changed concurrently (CAS conflict)")
+
+func (c *Coord) getObject(ctx context.Context, key string) (body []byte, etag string, ok bool, err error) {
 	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
@@ -73,31 +79,65 @@ func (c *Coord) getObject(ctx context.Context, key string) ([]byte, bool, error)
 		if errors.As(err, &nsk) ||
 			strings.Contains(err.Error(), "StatusCode: 404") ||
 			strings.Contains(err.Error(), "NoSuchKey") {
-			return nil, false, nil // missing => unset
+			return nil, "", false, nil // missing => unset
 		}
-		return nil, false, err
+		return nil, "", false, err
 	}
 	defer out.Body.Close()
 	b, err := io.ReadAll(out.Body)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
-	return b, true, nil
+	if out.ETag != nil {
+		etag = *out.ETag
+	}
+	return b, etag, true, nil
 }
 
 func (c *Coord) putObject(ctx context.Context, key, contentType string, body []byte) error {
-	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
+	return c.putObjectCond(ctx, key, contentType, body, "", "")
+}
+
+// putObjectCond writes an object with optional S3 conditional headers. ifMatch
+// requires the current ETag to equal the given value (compare-and-swap update);
+// ifNoneMatch="*" requires the object to not already exist (create-only). A 412
+// Precondition Failed is surfaced as ErrHandoffConflict. Backends that don't
+// support conditional writes simply ignore the headers, degrading to
+// last-write-wins (no worse than before).
+func (c *Coord) putObjectCond(ctx context.Context, key, contentType string, body []byte, ifMatch, ifNoneMatch string) error {
+	in := &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(body),
 		ContentType: aws.String(contentType),
-	})
+	}
+	if ifMatch != "" {
+		in.IfMatch = aws.String(ifMatch)
+	}
+	if ifNoneMatch != "" {
+		in.IfNoneMatch = aws.String(ifNoneMatch)
+	}
+	_, err := c.client.PutObject(ctx, in)
+	if err != nil && isPreconditionFailed(err) {
+		return ErrHandoffConflict
+	}
 	return err
+}
+
+// isPreconditionFailed detects an S3 412 response (failed If-Match/If-None-Match).
+func isPreconditionFailed(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "PreconditionFailed") ||
+		strings.Contains(msg, "StatusCode: 412") ||
+		strings.Contains(msg, "status code: 412")
 }
 
 // ReadToken returns the fencing token value (empty string when unset).
 func (c *Coord) ReadToken(ctx context.Context, key string) (string, error) {
-	b, ok, err := c.getObject(ctx, key)
+	b, _, ok, err := c.getObject(ctx, key)
 	if err != nil {
 		return "", fmt.Errorf("read fencing token: %w", err)
 	}
@@ -117,28 +157,56 @@ func (c *Coord) WriteToken(ctx context.Context, key, value string) error {
 
 // ReadHandoff returns the handoff record; ok=false when it does not exist yet.
 func (c *Coord) ReadHandoff(ctx context.Context, key string) (*HandoffRecord, bool, error) {
-	b, ok, err := c.getObject(ctx, key)
+	rec, _, ok, err := c.ReadHandoffWithETag(ctx, key)
+	return rec, ok, err
+}
+
+// ReadHandoffWithETag is ReadHandoff plus the object's ETag, for callers that
+// will conditionally update it (CAS) via WriteHandoffCAS. The ETag is empty when
+// the record does not exist yet.
+func (c *Coord) ReadHandoffWithETag(ctx context.Context, key string) (*HandoffRecord, string, bool, error) {
+	b, etag, ok, err := c.getObject(ctx, key)
 	if err != nil {
-		return nil, false, fmt.Errorf("read handoff: %w", err)
+		return nil, "", false, fmt.Errorf("read handoff: %w", err)
 	}
 	if !ok {
-		return nil, false, nil
+		return nil, "", false, nil
 	}
 	var rec HandoffRecord
 	if err := json.Unmarshal(b, &rec); err != nil {
-		return nil, false, fmt.Errorf("decode handoff: %w", err)
+		return nil, "", false, fmt.Errorf("decode handoff: %w", err)
 	}
-	return &rec, true, nil
+	return &rec, etag, true, nil
 }
 
-// WriteHandoff persists the handoff record (stamping UpdatedAt).
+// WriteHandoff persists the handoff record (stamping UpdatedAt) unconditionally.
 func (c *Coord) WriteHandoff(ctx context.Context, key string, rec *HandoffRecord) error {
+	return c.writeHandoff(ctx, key, rec, "", "")
+}
+
+// WriteHandoffCAS persists the handoff record only if it has not changed since
+// it was read. Pass the ETag from ReadHandoffWithETag; an empty ETag means the
+// record did not exist and the write is create-only (If-None-Match: *). On a
+// lost race it returns ErrHandoffConflict. This turns the epoch race from a
+// best-effort "higher wins" reconciliation into a hard guarantee that exactly
+// one side claims the handoff.
+func (c *Coord) WriteHandoffCAS(ctx context.Context, key string, rec *HandoffRecord, expectedETag string) error {
+	if expectedETag == "" {
+		return c.writeHandoff(ctx, key, rec, "", "*")
+	}
+	return c.writeHandoff(ctx, key, rec, expectedETag, "")
+}
+
+func (c *Coord) writeHandoff(ctx context.Context, key string, rec *HandoffRecord, ifMatch, ifNoneMatch string) error {
 	rec.UpdatedAt = time.Now().UTC()
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("encode handoff: %w", err)
 	}
-	if err := c.putObject(ctx, key, "application/json", b); err != nil {
+	if err := c.putObjectCond(ctx, key, "application/json", b, ifMatch, ifNoneMatch); err != nil {
+		if errors.Is(err, ErrHandoffConflict) {
+			return err
+		}
 		return fmt.Errorf("write handoff: %w", err)
 	}
 	return nil
