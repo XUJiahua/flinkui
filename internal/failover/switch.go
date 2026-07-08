@@ -3,6 +3,7 @@ package failover
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -93,6 +94,39 @@ func cloneTask(t *HATask) *HATask {
 // GetTask returns an HA task by ID.
 func (s *Service) GetTask(id string) (*HATask, bool) { return s.tasks.get(id) }
 
+// Claim idempotently marks THIS side active in the shared fencing token and
+// handoff record WITHOUT restarting the local job. It is the cold-start
+// bootstrap: after a fresh deploy the token is unset while the primary already
+// runs; Claim establishes the baseline (token=self, handoff stable) so the
+// fencing/observation is consistent. It does not force a redeploy (unlike
+// Promote), so it is safe to run against an already-running active side.
+func (s *Service) Claim(name string) error {
+	g, ok := s.cfg.HAGroupByName(name)
+	if !ok {
+		return fmt.Errorf("HA group %q not found", name)
+	}
+	if s.coord == nil {
+		return fmt.Errorf("S3 coordination not configured; cannot Claim")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := s.coord.WriteToken(ctx, g.FencingKey, g.ClusterID); err != nil {
+		return err
+	}
+	// Preserve an existing epoch if higher; otherwise start at 1.
+	epoch := int64(1)
+	if rec, ok, _ := s.coord.ReadHandoff(ctx, g.HandoffKey); ok && rec != nil && rec.Epoch > epoch {
+		epoch = rec.Epoch
+	}
+	return s.coord.WriteHandoff(ctx, g.HandoffKey, &store.HandoffRecord{
+		Group:           g.Name,
+		ActiveClusterID: g.ClusterID,
+		Epoch:           epoch,
+		Phase:           store.PhaseStable,
+	})
+}
+
 func (s *Service) failTask(id, step string, err error) {
 	s.tasks.setStep(id, step, StepFailed, err.Error())
 	s.tasks.update(id, func(t *HATask) {
@@ -169,19 +203,41 @@ func (s *Service) doRelease(taskID string, g config.LocalHAGroup) {
 
 	// 5. Write handoff (phase=released) so the peer can take over.
 	s.tasks.setStep(taskID, StepWriteHandoff, StepRunning, "publishing handoff record")
-	rec, _, _ := s.coord.ReadHandoff(ctx, g.HandoffKey)
-	if rec == nil {
-		rec = &store.HandoffRecord{Group: g.Name}
-	}
-	rec.Phase = store.PhaseReleased
-	rec.ReleasedBy = g.ClusterID
-	rec.RecoveryPoint = rp
-	if err := s.coord.WriteHandoff(ctx, g.HandoffKey, rec); err != nil {
+	if err := s.writeReleasedHandoff(ctx, g, rp); err != nil {
 		s.failTask(taskID, StepWriteHandoff, err)
 		return
 	}
 	s.tasks.setStep(taskID, StepWriteHandoff, StepDone, "released; peer may now Promote")
 	s.tasks.update(taskID, func(t *HATask) { t.Status = TaskSucceeded })
+}
+
+// writeReleasedHandoff sets phase=released via a compare-and-swap loop so a
+// concurrent handoff update (e.g. the peer writing) cannot be silently clobbered
+// nor clobber us; on CAS conflict it re-reads and retries a bounded number of
+// times.
+func (s *Service) writeReleasedHandoff(ctx context.Context, g config.LocalHAGroup, rp store.RecoveryPointRef) error {
+	const attempts = 3
+	for i := 0; i < attempts; i++ {
+		rec, etag, _, err := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
+		if err != nil {
+			return err
+		}
+		if rec == nil {
+			rec = &store.HandoffRecord{Group: g.Name}
+		}
+		rec.Phase = store.PhaseReleased
+		rec.ReleasedBy = g.ClusterID
+		rec.RecoveryPoint = rp
+		err = s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, store.ErrHandoffConflict) {
+			continue // re-read and retry
+		}
+		return err
+	}
+	return fmt.Errorf("handoff record kept changing during release (CAS retries exhausted)")
 }
 
 // Promote performs the target-side, LOCAL-only take-over: pick recovery point ->
@@ -217,7 +273,7 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 
 	// 1. Read handoff and gate on it unless forcing.
 	s.tasks.setStep(taskID, StepReadHandoff, StepRunning, "reading handoff record")
-	rec, _, _ := s.coord.ReadHandoff(ctx, g.HandoffKey)
+	rec, handoffETag, _, _ := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
 	if !force {
 		released := rec != nil && rec.Phase == store.PhaseReleased
 		if !released {
@@ -234,21 +290,28 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 	s.tasks.update(taskID, func(t *HATask) { t.RecoveryPoint = store.RecoveryPointRef{Path: path, Kind: kind} })
 	s.tasks.setStep(taskID, StepPickRecovery, StepDone, fmt.Sprintf("%s: %s", kind, path))
 
-	// 3. Token -> self, epoch+1.
+	// 3. Claim the handoff (epoch+1) via CAS, then point the token at self.
+	//    The CAS is the atomic winner: if the peer promoted at the same instant
+	//    the conditional write fails and we abort instead of overwriting.
 	epoch := int64(1)
 	if rec != nil {
 		epoch = rec.Epoch + 1
 	}
-	s.tasks.setStep(taskID, StepTokenToSelf, StepRunning, "claiming token -> "+g.ClusterID)
-	if err := s.coord.WriteToken(ctx, g.FencingKey, g.ClusterID); err != nil {
-		s.failTask(taskID, StepTokenToSelf, err)
-		return
-	}
+	s.tasks.setStep(taskID, StepTokenToSelf, StepRunning, "claiming handoff -> "+g.ClusterID)
 	newRec := &store.HandoffRecord{
 		Group: g.Name, ActiveClusterID: g.ClusterID, Epoch: epoch,
 		Phase: store.PhaseStable, RecoveryPoint: store.RecoveryPointRef{Path: path, Kind: kind},
 	}
-	if err := s.coord.WriteHandoff(ctx, g.HandoffKey, newRec); err != nil {
+	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, newRec, handoffETag); err != nil {
+		if errors.Is(err, store.ErrHandoffConflict) {
+			s.failTask(taskID, StepTokenToSelf,
+				fmt.Errorf("the peer changed the handoff concurrently (likely promoted at the same time); aborted to avoid split-brain — re-check state and retry"))
+			return
+		}
+		s.failTask(taskID, StepTokenToSelf, err)
+		return
+	}
+	if err := s.coord.WriteToken(ctx, g.FencingKey, g.ClusterID); err != nil {
 		s.failTask(taskID, StepTokenToSelf, err)
 		return
 	}
@@ -257,7 +320,7 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 
 	// 4. Start local from the recovery point (nonce forces redeploy).
 	s.tasks.setStep(taskID, StepStartLocal, StepRunning, "starting local job")
-	nonce := time.Now().Unix()
+	nonce := flink.NextRedeployNonce()
 	if err := acc.PatchFlinkDeployment(ctx, g.Deployment, statePatchJSON("running", path, nonce)); err != nil {
 		s.failTask(taskID, StepStartLocal, err)
 		return

@@ -207,7 +207,18 @@ ha:
 交接记录（epoch/phase/recoveryPoint）、**对端标注"未观测（跨集群）"**、以及本地不一致告警
 （如 token 指向对端但本地在跑 = 脑裂风险）。
 
-### 7.3 计划切换（两侧都活，只是跨集群网断）——A → B
+### 7.3 冷启动 / 初始化 fencing token
+
+全新部署时 fencing token 从未写过（`token → unset`），若主侧作业已在跑，HA 页会提示
+`fencing token is unset while the local job runs`。这是正常的，需要**初始化一次基线**：
+
+- 在**当前活跃侧**的 flinkui，该组卡片上点 **Initialize (claim active)** → 确认。
+- 效果（幂等，**不重启作业**）：写 `token = 本侧 clusterId` + 交接记录（epoch=1, phase=stable）。
+- 之后活跃侧显示 `token → <clusterId>` / role=active，备侧显示 role=standby，警告消失。
+
+> 要求已配置共享 S3（见 §7.1）。若按钮不出现，说明 token 已非 unset。
+
+### 7.4 计划切换（两侧都活，只是跨集群网断）——A → B
 
 1. **在 A 侧 flinkui** 点某组的 **Release（让位）** → 勾选确认 → 执行：
    savepoint（本地健康）→ suspend 本地 → 等本地 JM Pod 归零 → token 置中性 → 写交接记录 `released`。
@@ -216,7 +227,7 @@ ha:
 
 两侧看的是同一份 S3 交接记录，据此协作。
 
-### 7.4 灾难切换（A 已死/彻底不可达）——B 强制接管
+### 7.5 灾难切换（A 已死/彻底不可达）——B 强制接管
 
 1. 先尽力用其它手段确认 A 确实不可用。
 2. **在 B 侧 flinkui** 点 **Promote** → 勾选 **Force（对端未 released）** → 勾选
@@ -227,7 +238,7 @@ ha:
 > 若 A 只是与 B/运维分区、其实还活着，force Promote 会导致**运行期双跑**。
 > 因此 force 必须人工确认；根治需要给作业加"运行期自我隔离 sidecar"（路线图项）。
 
-### 7.5 前提与注意
+### 7.6 前提与注意
 
 - **共享 S3 必须两侧可达且强一致**（它是唯一协调平面）。S3 也不可达时只能纯人工。
 - 交接任务为 in-memory，平台重启会丢半途任务状态，但视图可从 S3 token+交接记录+本地状态重建。
@@ -280,6 +291,7 @@ GET  /api/operations/:id              （异步 savepoint/restart 进度）
 ```
 GET  /api/ha
 GET  /api/ha/:name
+POST /api/ha/:name/claim              {confirm:true}   （冷启动初始化 token，不重启作业）
 POST /api/ha/:name/release            {confirm:true}
 POST /api/ha/:name/promote            {confirm:true, force?:bool, ackDataLoss?:bool}
 GET  /api/ha-tasks/:id

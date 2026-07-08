@@ -39,6 +39,8 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.S
 	// Protected API.
 	api := r.Group("/api")
 	api.Use(a.Middleware())
+	// Audit trail for mutating operations (runs after auth so the user is known).
+	api.Use(auditMiddleware())
 	{
 		api.GET("/cluster", h.clusterInfo)
 		api.GET("/jobs", h.listJobs)
@@ -60,6 +62,7 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.S
 		// Decentralized HA (failover-decentralized): local observation + switch.
 		api.GET("/ha", h.listHA)
 		api.GET("/ha/:name", h.getHA)
+		api.POST("/ha/:name/claim", h.claim)
 		api.POST("/ha/:name/release", h.release)
 		api.POST("/ha/:name/promote", h.promote)
 		api.GET("/ha-tasks/:id", h.getHATask)

@@ -95,6 +95,11 @@ export const api = {
   // Decentralized HA.
   listHA: () => request<{ groups: LocalView[] }>("/api/ha"),
   getHA: (name: string) => request<LocalView>(`/api/ha/${encodeURIComponent(name)}`),
+  claim: (name: string) =>
+    request<{ ok: boolean }>(`/api/ha/${encodeURIComponent(name)}/claim`, {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    }),
   release: (name: string) =>
     request<HATask>(`/api/ha/${encodeURIComponent(name)}/release`, {
       method: "POST",

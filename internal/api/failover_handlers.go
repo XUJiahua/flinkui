@@ -91,6 +91,24 @@ func (h *Handlers) promote(c *gin.Context) {
 	c.JSON(http.StatusAccepted, task)
 }
 
+// claim handles POST /api/ha/:name/claim — cold-start bootstrap of the fencing
+// token to THIS side (idempotent, no job restart).
+func (h *Handlers) claim(c *gin.Context) {
+	if !h.haEnabled(c) {
+		return
+	}
+	var req releaseRequest // reuse {confirm}
+	if err := c.ShouldBindJSON(&req); err != nil || !req.Confirm {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "confirmation required: send {\"confirm\": true}"})
+		return
+	}
+	if err := h.fo.Claim(c.Param("name")); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // getHATask handles GET /api/ha-tasks/:id.
 func (h *Handlers) getHATask(c *gin.Context) {
 	if !h.haEnabled(c) {

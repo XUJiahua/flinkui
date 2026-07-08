@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ShieldCheck, ShieldAlert, HelpCircle } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth";
@@ -54,8 +54,28 @@ export default function HAPage() {
 }
 
 function GroupCard({ view }: { view: LocalView }) {
+  const qc = useQueryClient();
   const [wizard, setWizard] = React.useState<null | "release" | "promote">(null);
+  const [claiming, setClaiming] = React.useState(false);
+  const [claimErr, setClaimErr] = React.useState("");
   const localRunning = !!view.local?.healthy;
+  const tokenUnset = view.fencing.pointsTo === "unset";
+
+  const onClaim = async () => {
+    if (!window.confirm(`Initialize the fencing token to ${view.clusterId} (mark this side active)? This does not restart the job.`)) {
+      return;
+    }
+    setClaiming(true);
+    setClaimErr("");
+    try {
+      await api.claim(view.name);
+      qc.invalidateQueries({ queryKey: ["ha"] });
+    } catch (e) {
+      setClaimErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setClaiming(false);
+    }
+  };
 
   return (
     <Card>
@@ -66,6 +86,11 @@ function GroupCard({ view }: { view: LocalView }) {
           <Badge variant="outline">token → {view.fencing.token || view.fencing.pointsTo}</Badge>
         </CardTitle>
         <div className="flex items-center gap-2">
+          {tokenUnset && (
+            <Button size="sm" variant="secondary" disabled={claiming} onClick={onClaim}>
+              {claiming ? "Initializing…" : "Initialize (claim active)"}
+            </Button>
+          )}
           <Button size="sm" variant="outline" disabled={!localRunning} onClick={() => setWizard("release")}>
             Release (step down)
           </Button>
@@ -75,6 +100,7 @@ function GroupCard({ view }: { view: LocalView }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {claimErr && <p className="text-sm text-destructive">{claimErr}</p>}
         {view.warning && (
           <div className="flex items-center gap-2 rounded-md border border-amber-500 bg-amber-50 p-3 text-sm text-amber-900">
             <AlertTriangle className="h-4 w-4 shrink-0" />
