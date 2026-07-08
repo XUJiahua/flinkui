@@ -15,6 +15,9 @@ spec:
       annotations:
         # Roll pods when the auth/S3 secrets change.
         checksum/config: {{ include (print $.Template.BasePath "/secret-auth.yaml") . | sha256sum }}
+        {{- if .Values.ha.groups }}
+        checksum/ha: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -37,6 +40,9 @@ spec:
         - name: flinkui
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.ha.groups }}
+          args: ["-config", "/etc/flinkui/config.yaml"]
+          {{- end }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -105,6 +111,12 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if .Values.ha.groups }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/flinkui
+              readOnly: true
+          {{- end }}
           {{- with .Values.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
@@ -117,6 +129,12 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- if .Values.ha.groups }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "flinkui.fullname" . }}-config
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

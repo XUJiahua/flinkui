@@ -63,6 +63,26 @@ extraEnv: []
 #  - name: FKO_SOMETHING
 #    value: "x"
 
+# -- Decentralized HA / failover (failover-decentralized). ------------------
+# Declares the LOCAL primary/standby groups THIS instance participates in. Each
+# side's flinkui runs a mirror-image config and acts ONLY on its local cluster;
+# coordination is via the shared S3 fencing token + handoff record (enable s3
+# above with the SHARED store). When ha.groups is non-empty the chart renders a
+# ConfigMap and runs the binary with -config (env still overrides file values,
+# so only ha.* needs the file).
+ha:
+  # groups: []  # (empty => failover UI disabled)
+  groups: []
+  #  - name: orders
+  #    namespace: flink-jobs            # local namespace
+  #    deployment: flink-sql-job-orders # local deployment
+  #    clusterId: cluster-a             # this side's clusterId (token value when active)
+  #    peerClusterId: cluster-b         # the other side (display + handoff)
+  #    # optional (defaults shown):
+  #    # fencingKey: fencing/active-cluster
+  #    # neutralToken: __switching__
+  #    # handoffKey: fencing/handoff/orders
+
 serviceAccount:
   create: true
   name: ""

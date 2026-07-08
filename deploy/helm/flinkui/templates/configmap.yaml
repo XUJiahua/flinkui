@@ -1,0 +1,31 @@
+{{- if .Values.ha.groups }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flinkui.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "flinkui.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    # Rendered by the Helm chart. Only ha.* is provided here; addr/auth/cluster/s3
+    # come from FKO_* env vars, which override config-file values.
+    ha:
+      groups:
+        {{- range .Values.ha.groups }}
+        - name: {{ .name | quote }}
+          namespace: {{ .namespace | quote }}
+          deployment: {{ .deployment | quote }}
+          cluster_id: {{ .clusterId | quote }}
+          peer_cluster_id: {{ .peerClusterId | quote }}
+          {{- with .fencingKey }}
+          fencing_key: {{ . | quote }}
+          {{- end }}
+          {{- with .neutralToken }}
+          neutral_token: {{ . | quote }}
+          {{- end }}
+          {{- with .handoffKey }}
+          handoff_key: {{ . | quote }}
+          {{- end }}
+        {{- end }}
+{{- end }}

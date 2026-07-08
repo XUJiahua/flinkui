@@ -32,3 +32,13 @@ s3:
 service:
   type: ClusterIP
   port: 80
+
+# Optional: decentralized HA (see values-example-full.yaml / docs). Requires the
+# peer cluster's flinkui to run a mirror config against the same shared S3.
+# ha:
+#   groups:
+#     - name: orders
+#       namespace: flink-jobs
+#       deployment: flink-sql-job-orders
+#       clusterId: cluster-a
+#       peerClusterId: cluster-b
