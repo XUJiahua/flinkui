@@ -216,7 +216,9 @@ func (c *Config) NormalizeGroup(g LocalHAGroup) LocalHAGroup {
 		g.NeutralToken = DefaultNeutralToken
 	}
 	if g.HandoffKey == "" {
-		g.HandoffKey = "fencing/handoff/" + g.Name
+		// Co-located with the token under fencing/<group>/ for consistency and
+		// easy per-job cleanup (fencing/<group>/active-cluster + /handoff).
+		g.HandoffKey = "fencing/" + g.Name + "/handoff"
 	}
 	return g
 }

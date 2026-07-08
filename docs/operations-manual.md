@@ -219,7 +219,7 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 > **fencing token**(`fencingKey`,**每组独立**,默认 `fencing/<组名>/active-cluster`)= 一个 clusterId,
 > 表示"谁能跑",作业 Pod 的 fencing initContainer 也校验它——**平台的 `fencingKey` 必须与作业
 > initContainer 校验的 key 一致**;且**不要多组共用一个 key**(否则 Release 一个会让所有组 neutral)。
-> **交接记录**(`handoffKey`,默认 `fencing/handoff/<组名>`)
+> **交接记录**(`handoffKey`,默认 `fencing/<组名>/handoff`)
 > = 一段 JSON(epoch/phase/recoveryPoint/releasedBy),是去中心两侧之间的"交接留言"——因为 A 做
 > Release、B 做 Promote 是**两个连不通对端的独立操作**,B 必须从这里读到 A 的**恢复点**(零丢失
 > savepoint 路径)、是否**已让位**(phase=released,普通 Promote 的前提)、以及 **epoch**(防旧主抢回/

@@ -113,7 +113,7 @@ ha:
 	if g.FencingKey != "fencing/orders/active-cluster" || g.NeutralToken != DefaultNeutralToken {
 		t.Errorf("defaults not applied: %+v", g)
 	}
-	if g.HandoffKey != "fencing/handoff/orders" {
+	if g.HandoffKey != "fencing/orders/handoff" {
 		t.Errorf("handoff default = %q", g.HandoffKey)
 	}
 	if g.ClusterID != "cluster-a" || g.PeerClusterID != "cluster-b" || g.Deployment != "flink-sql-job-orders" {
@@ -156,7 +156,7 @@ ha:
 	if g.ClusterID != "cluster-a" || g.PeerClusterID != "cluster-b" {
 		t.Errorf("identity defaults wrong: %+v", g)
 	}
-	if g.HandoffKey != "fencing/handoff/codes" {
+	if g.HandoffKey != "fencing/codes/handoff" {
 		t.Errorf("handoff default = %q", g.HandoffKey)
 	}
 }
