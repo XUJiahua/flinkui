@@ -281,8 +281,15 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 	if !force {
 		released := rec != nil && rec.Phase == store.PhaseReleased
 		if !released {
+			phase := "unset"
+			if rec != nil && rec.Phase != "" {
+				phase = rec.Phase
+			}
 			s.failTask(taskID, StepReadHandoff,
-				fmt.Errorf("peer has not released (handoff phase != released); use force to take over (risks split-brain), which requires acknowledging data loss"))
+				fmt.Errorf("this group's handoff phase is %q, not %q — the peer has not stepped down, so there is nothing to take over. "+
+					"To bring an already-released side back, Promote the SAME group that was Released. "+
+					"For a disaster take-over of a still-running/partitioned peer, use force (risks split-brain; requires acknowledging data loss)",
+					phase, store.PhaseReleased))
 			return
 		}
 	}

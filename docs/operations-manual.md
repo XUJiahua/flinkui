@@ -216,8 +216,10 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 （如 token 指向对端但本地在跑 = 脑裂风险）。
 
 > **fencing token vs 交接记录(handoff)**:共享 S3 上有两个对象。
-> **fencing token**(`fencingKey`,默认 `fencing/active-cluster`)= 一个 clusterId,表示"谁能跑",
-> 作业 Pod 的 fencing initContainer 也校验它。**交接记录**(`handoffKey`,默认 `fencing/handoff/<组名>`)
+> **fencing token**(`fencingKey`,**每组独立**,默认 `fencing/<组名>/active-cluster`)= 一个 clusterId,
+> 表示"谁能跑",作业 Pod 的 fencing initContainer 也校验它——**平台的 `fencingKey` 必须与作业
+> initContainer 校验的 key 一致**;且**不要多组共用一个 key**(否则 Release 一个会让所有组 neutral)。
+> **交接记录**(`handoffKey`,默认 `fencing/handoff/<组名>`)
 > = 一段 JSON(epoch/phase/recoveryPoint/releasedBy),是去中心两侧之间的"交接留言"——因为 A 做
 > Release、B 做 Promote 是**两个连不通对端的独立操作**,B 必须从这里读到 A 的**恢复点**(零丢失
 > savepoint 路径)、是否**已让位**(phase=released,普通 Promote 的前提)、以及 **epoch**(防旧主抢回/
@@ -281,7 +283,9 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 | S3 报 `must be made to API port` | 用了 MinIO 控制台端口，改用 9000 |
 | S3 报 400 `Bad Request`（http） | API 端口其实是 HTTPS，用 `https://` |
 | HA 页 `no HA groups configured` | 未声明 `ha.groups`（需 `-config`） |
-| HA `token unset while local job runs` | fencing token 未初始化；正常情况应由切换流程写入 |
+| HA `token unset while local job runs` | fencing token 未初始化；点该组 **Initialize (claim active)** 建立基线（见 §7.3） |
+| Release 一个作业后**所有组都变 neutral** | 多组**共用了同一个 `fencingKey`**。默认已是每组独立 `fencing/<组名>/active-cluster`；若显式设了共享 key，请改为每组独立（并与作业 initContainer 对齐，见 §7.2） |
+| Promote 报 `handoff phase is ... not released` | 该组从未 Release 过(没有可接管的让位)。要恢复**刚被 Release 的那一组**,就 Promote **同一组**;要在对端仍在跑/分区时强行接管,用 **force + 数据丢失确认**。常由上一行的"共用 fencingKey"误导去 Promote 了别的组 |
 | HA 脑裂告警（两侧都 RUNNING） | 立即介入：确认唯一活跃侧，停掉多余一侧，修正 token |
 
 ---

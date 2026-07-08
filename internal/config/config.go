@@ -84,9 +84,10 @@ type HAConfig struct {
 	Groups  []LocalHAGroup `mapstructure:"groups"`
 }
 
-// Default fencing/handoff settings mirroring scripts/failover.sh.
+// Default fencing/handoff settings mirroring scripts/failover.sh. The fencing
+// key is per-group (fencing/<group>/active-cluster) so groups fail over
+// independently; the neutral token fences a group during its own switch.
 const (
-	DefaultFencingKey   = "fencing/active-cluster"
 	DefaultNeutralToken = "__switching__"
 )
 
@@ -206,7 +207,10 @@ func (c *Config) NormalizeGroup(g LocalHAGroup) LocalHAGroup {
 		g.PeerClusterID = c.HA.DefaultPeerClusterID
 	}
 	if g.FencingKey == "" {
-		g.FencingKey = DefaultFencingKey
+		// Per-group by default so Releasing one group does not flip a shared
+		// token for all groups. MUST match the key the job's fencing
+		// initContainer reads (see docs/failover-decentralized-design.md §3).
+		g.FencingKey = "fencing/" + g.Name + "/active-cluster"
 	}
 	if g.NeutralToken == "" {
 		g.NeutralToken = DefaultNeutralToken

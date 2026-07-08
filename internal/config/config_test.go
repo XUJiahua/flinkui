@@ -110,7 +110,7 @@ ha:
 		t.Fatal("orders not found")
 	}
 	// defaults applied
-	if g.FencingKey != DefaultFencingKey || g.NeutralToken != DefaultNeutralToken {
+	if g.FencingKey != "fencing/orders/active-cluster" || g.NeutralToken != DefaultNeutralToken {
 		t.Errorf("defaults not applied: %+v", g)
 	}
 	if g.HandoffKey != "fencing/handoff/orders" {
