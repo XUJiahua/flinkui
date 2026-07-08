@@ -8,6 +8,7 @@ import { useAuthGuard } from "@/lib/use-auth";
 import { Header } from "@/components/header";
 import { StatusBadge } from "@/components/status-badge";
 import { HASwitchWizard } from "@/components/ha-switch-wizard";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,6 +60,7 @@ function GroupCard({ view }: { view: LocalView }) {
   const [claiming, setClaiming] = React.useState(false);
   const [claimErr, setClaimErr] = React.useState("");
   const [resuming, setResuming] = React.useState(false);
+  const [confirmClaim, setConfirmClaim] = React.useState(false);
   const localRunning = !!view.local?.healthy;
   const tokenUnset = view.fencing.pointsTo === "unset";
   const isActive = view.role === "active";
@@ -67,9 +69,7 @@ function GroupCard({ view }: { view: LocalView }) {
   const ownedButStopped = isActive && !localRunning;
 
   const onClaim = async () => {
-    if (!window.confirm(`Initialize the fencing token to ${view.clusterId} (mark this side active)? This does not restart the job.`)) {
-      return;
-    }
+    setConfirmClaim(false);
     setClaiming(true);
     setClaimErr("");
     try {
@@ -106,7 +106,7 @@ function GroupCard({ view }: { view: LocalView }) {
         </CardTitle>
         <div className="flex items-center gap-2">
           {tokenUnset && (
-            <Button size="sm" variant="secondary" disabled={claiming} onClick={onClaim}>
+            <Button size="sm" variant="secondary" disabled={claiming} onClick={() => setConfirmClaim(true)}>
               {claiming ? "Initializing…" : "Initialize (claim active)"}
             </Button>
           )}
@@ -210,6 +210,16 @@ function GroupCard({ view }: { view: LocalView }) {
       </CardContent>
 
       {wizard && <HASwitchWizard open view={view} op={wizard} onClose={() => setWizard(null)} />}
+
+      <ConfirmDialog
+        open={confirmClaim}
+        title={`Initialize fencing token for "${view.name}"?`}
+        description={`Marks this side (${view.clusterId}) as active in the shared fencing token and handoff record. This does not restart or modify the local job.`}
+        confirmLabel="Initialize"
+        loading={claiming}
+        onClose={() => setConfirmClaim(false)}
+        onConfirm={onClaim}
+      />
     </Card>
   );
 }
