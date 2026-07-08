@@ -114,6 +114,7 @@ can also be supplied with `-config path.yaml`.
 | `FKO_STOP_TIMEOUT_SEC` | `120` | restart "wait JM pod = 0" timeout |
 | `FKO_LOG_TAIL_LINES` | `200` | default log tail size |
 | `FKO_STATUS_POLL_SEC` | `5` | WebSocket status push interval |
+| `FKO_ALLOWED_ORIGINS` | _(empty)_ | comma-separated extra browser origins allowed to open the status WebSocket (same-origin is always allowed) |
 | `FKO_CLUSTER_NAME` | `default` | cluster identifier (display) |
 | `FKO_CLUSTER_NAMESPACE` | `flink-operator` | namespace holding FlinkDeployments |
 | `FKO_CLUSTER_KUBECONFIG` | _(empty)_ | kubeconfig path; empty ⇒ in-cluster |
@@ -125,10 +126,17 @@ can also be supplied with `-config path.yaml`.
 | `FKO_AUTH_USERNAME` | `admin` | login username |
 | `FKO_AUTH_PASSWORD` | _(empty)_ | login password — **set this** |
 | `FKO_AUTH_SESSION_SECRET` | `change-me-please` | cookie signing secret — **set this** |
+| `FKO_AUTH_COOKIE_SECURE` | `false` | set the `Secure` flag on the session cookie — **enable when served over TLS** |
 
 > Security: this service can mutate cluster workloads, so it must not be exposed
 > unauthenticated. Always set `FKO_AUTH_PASSWORD` and a strong
-> `FKO_AUTH_SESSION_SECRET` (design §6). Fine-grained RBAC is on the roadmap.
+> `FKO_AUTH_SESSION_SECRET` (design §6). When served over HTTPS (e.g. behind a
+> TLS-terminating ingress) set `FKO_AUTH_COOKIE_SECURE=true` so the session
+> cookie is never sent over plain HTTP. The status WebSocket rejects cross-origin
+> upgrades (same-origin plus `FKO_ALLOWED_ORIGINS`), and every mutating operation
+> (suspend/resume/restart/savepoint/rollback/release/promote) emits a structured
+> JSON audit record to stdout (`event=audit`, with user, operation, resource,
+> status, duration). Fine-grained RBAC is on the roadmap.
 
 ## Container / in-cluster deployment
 

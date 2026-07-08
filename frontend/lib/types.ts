@@ -1,6 +1,17 @@
 // Types mirror the Go backend JSON responses (internal/flink, internal/cluster,
 // internal/store).
 
+// Health mirrors the backend's explicit status classification (design §13).
+export type Health =
+  | "healthy"
+  | "progressing"
+  | "degraded"
+  | "suspended"
+  | "stopped"
+  | "unreachable"
+  | "notfound"
+  | "unknown";
+
 export interface JobSummary {
   namespace: string;
   deployment: string;
@@ -13,6 +24,7 @@ export interface JobSummary {
   parallelism: number;
   statusText: string;
   healthy: boolean;
+  health: Health;
   reachable: boolean;
 }
 
@@ -51,6 +63,7 @@ export interface ClusterInfo {
   name: string;
   namespace: string;
   s3Configured: boolean;
+  clusterReachable: boolean;
 }
 
 export interface SavepointResult {

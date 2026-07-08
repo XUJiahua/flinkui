@@ -26,6 +26,12 @@ type Service struct {
 	locks map[string]*sync.Mutex
 
 	ops *operationStore
+
+	// Cached cluster-reachability probe (short TTL) so readyz/cluster endpoints
+	// can report a degraded signal without hammering the API server.
+	reachMu sync.Mutex
+	reachAt time.Time
+	reachOK bool
 }
 
 // NewService constructs a Service.
@@ -76,6 +82,32 @@ func (s *Service) List(ctx context.Context) ([]JobSummary, error) {
 // sortSummaries orders summaries by deployment name for a stable default order.
 func sortSummaries(out []JobSummary) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Deployment < out[j].Deployment })
+}
+
+// Reachable reports whether the target cluster API can currently be reached. It
+// issues a short, bounded LIVE list (bypassing the informer cache so a stale
+// cache cannot mask an outage) and caches the result briefly so frequent probes
+// (readyz) don't hammer the API server.
+func (s *Service) Reachable(ctx context.Context) bool {
+	const ttl = 5 * time.Second
+	s.reachMu.Lock()
+	if time.Since(s.reachAt) < ttl {
+		ok := s.reachOK
+		s.reachMu.Unlock()
+		return ok
+	}
+	s.reachMu.Unlock()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, err := s.acc.ListFlinkDeployments(probeCtx)
+	ok := err == nil
+
+	s.reachMu.Lock()
+	s.reachAt = time.Now()
+	s.reachOK = ok
+	s.reachMu.Unlock()
+	return ok
 }
 
 // Get returns a single deployment's detail (status + pods + events).
@@ -132,8 +164,53 @@ func (s *Service) summaryFrom(u *unstructured.Unstructured) JobSummary {
 		Parallelism:    parallelism,
 		StatusText:     statusText,
 		Healthy:        statusText == "RUNNING/STABLE",
+		Health:         classifyHealth(jobState, lifecycle, specState),
 		Reachable:      true,
 	}
+}
+
+// classifyHealth maps the operator's lifecycleState and Flink's jobStatus.state
+// to an explicit health class (design §13). Priority order: failures first, then
+// intentionally-suspended, then the healthy steady state, then in-flight
+// transitions, then terminal/unknown. This replaces implicit substring matching
+// so states like FAILED / ROLLED_BACK / UPGRADING surface distinctly.
+func classifyHealth(jobState, lifecycle, specState string) string {
+	// 1. Attention-needed failures.
+	switch lifecycle {
+	case "FAILED", "ROLLED_BACK":
+		return HealthDegraded
+	}
+	switch jobState {
+	case "FAILED", "FAILING":
+		return HealthDegraded
+	}
+	// 2. Intentionally suspended / idle.
+	if specState == "suspended" || jobState == "SUSPENDED" || lifecycle == "SUSPENDED" {
+		return HealthSuspended
+	}
+	// 3. Healthy steady state.
+	if jobState == "RUNNING" && lifecycle == "STABLE" {
+		return HealthHealthy
+	}
+	// 4. In-flight transitions (operator or Flink still converging).
+	switch lifecycle {
+	case "UPGRADING", "ROLLING_BACK", "DEPLOYING", "DEPLOYED", "CREATED", "RECONCILING":
+		return HealthProgressing
+	}
+	switch jobState {
+	case "RECONCILING", "CREATED", "INITIALIZING", "SCHEDULED", "STARTING", "RESTARTING", "CANCELLING", "RUNNING":
+		return HealthProgressing
+	}
+	// 5. Terminal non-failure, then unknown.
+	switch jobState {
+	case "FINISHED", "CANCELED":
+		return HealthStopped
+	}
+	// Empty status with a desired running state means it is coming up.
+	if jobState == "" && lifecycle == "" && specState == "running" {
+		return HealthProgressing
+	}
+	return HealthUnknown
 }
 
 // combinedStatus mirrors job.sh get_status(): when .status is empty fall back
@@ -163,7 +240,7 @@ func combinedStatus(jobState, lifecycle, specState string) string {
 func notFoundSummary(ns, dep, job string) JobSummary {
 	return JobSummary{
 		Namespace: ns, Deployment: dep, JobName: job,
-		StatusText: StatusNotFound, Reachable: false,
+		StatusText: StatusNotFound, Health: HealthNotFound, Reachable: false,
 	}
 }
 
@@ -248,7 +325,7 @@ func (s *Service) Rollback(ctx context.Context, name, path string) error {
 	l.Lock()
 	defer l.Unlock()
 
-	nonce := time.Now().Unix()
+	nonce := NextRedeployNonce()
 	patch, _ := json.Marshal(map[string]any{
 		"spec": map[string]any{"job": map[string]any{
 			"state":                  "running",

@@ -138,9 +138,10 @@ func (h *Handlers) recoveryPoints(c *gin.Context) {
 // clusterInfo handles GET /api/cluster.
 func (h *Handlers) clusterInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"name":         h.cfg.Cluster.Name,
-		"namespace":    h.cfg.Cluster.Namespace,
-		"s3Configured": h.store != nil,
+		"name":             h.cfg.Cluster.Name,
+		"namespace":        h.cfg.Cluster.Namespace,
+		"s3Configured":     h.store != nil,
+		"clusterReachable": h.svc.Reachable(c.Request.Context()),
 	})
 }
 
@@ -149,8 +150,16 @@ func (h *Handlers) healthz(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// readyz is a readiness probe: the process can serve requests. It does not call
-// the cluster (a transient API blip should not remove the console from service).
+// readyz is a readiness probe. It reports "ready" normally and "degraded" when
+// the target cluster API cannot be reached — but always returns 200 so a
+// transient API blip does not remove the console from service (the console can
+// still serve cached data and auth). The degraded flag is an operational signal
+// for dashboards/alerts, not a hard failure.
 func (h *Handlers) readyz(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	reachable := h.svc.Reachable(c.Request.Context())
+	status := "ready"
+	if !reachable {
+		status = "degraded"
+	}
+	c.JSON(http.StatusOK, gin.H{"status": status, "clusterReachable": reachable})
 }

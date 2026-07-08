@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, LogOut } from "lucide-react";
+import { Activity, LogOut, AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
@@ -12,13 +12,15 @@ import { Button } from "@/components/ui/button";
 export function Header() {
   const router = useRouter();
   const qc = useQueryClient();
-  const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster });
+  const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster, refetchInterval: 15000 });
 
   const onLogout = async () => {
     await api.logout();
     qc.clear();
     router.replace("/login");
   };
+
+  const degraded = cluster.data && cluster.data.clusterReachable === false;
 
   return (
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
@@ -36,6 +38,14 @@ export function Header() {
           </Link>
         </nav>
         <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          {degraded && (
+            <span
+              className="flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive"
+              title="The Kubernetes API for this cluster is currently unreachable; data may be stale."
+            >
+              <AlertTriangle className="h-3.5 w-3.5" /> cluster unreachable
+            </span>
+          )}
           {cluster.data && (
             <span>
               cluster <span className="font-medium text-foreground">{cluster.data.name}</span> · ns{" "}

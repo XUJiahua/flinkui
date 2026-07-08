@@ -112,6 +112,7 @@ func unreachable(g config.LocalHAGroup) *flink.JobDetail {
 		Namespace:  g.Namespace,
 		Deployment: g.Deployment,
 		StatusText: flink.StatusUnreachable,
+		Health:     flink.HealthUnreachable,
 		Reachable:  false,
 	}}
 }
