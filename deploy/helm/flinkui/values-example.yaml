@@ -9,7 +9,7 @@
 
 image:
   repository: docker.io/johnxu1989/flinkui
-  tag: "0.2.3"
+  tag: "0.2.4"
 
 config:
   clusterName: "k3s"

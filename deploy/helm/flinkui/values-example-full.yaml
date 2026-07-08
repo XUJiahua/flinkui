@@ -15,7 +15,7 @@ replicaCount: 1
 image:
   repository: docker.io/johnxu1989/flinkui
   # 留空则用 Chart.appVersion；生产建议固定到具体版本。
-  tag: "0.2.3"
+  tag: "0.2.4"
   pullPolicy: IfNotPresent
 
 # 私有镜像仓库时配置拉取密钥（先 kubectl create secret docker-registry ...）。

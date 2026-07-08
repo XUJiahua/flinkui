@@ -3,9 +3,9 @@ name: flinkui
 description: Flink Job Console — lifecycle management WebUI for FlinkDeployment jobs on the Flink Kubernetes Operator.
 type: application
 # Chart version — bump on chart changes.
-version: 0.2.3
+version: 0.2.4
 # Default application version (overridable via image.tag). Matches the app release.
-appVersion: "0.2.3"
+appVersion: "0.2.4"
 keywords:
   - flink
   - flink-kubernetes-operator
