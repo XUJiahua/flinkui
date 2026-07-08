@@ -148,16 +148,29 @@ function GroupCard({ view }: { view: LocalView }) {
             {view.fencing.error ? <span className="text-destructive"> ({view.fencing.error})</span> : null}
           </div>
           {view.handoff ? (
-            <div className="mt-1">
-              handoff: active=<span className="font-mono">{view.handoff.activeClusterId || "—"}</span> · epoch{" "}
-              {view.handoff.epoch} · phase <b>{view.handoff.phase}</b>
-              {view.handoff.recoveryPoint?.path && (
-                <> · rp <span className="font-mono">{view.handoff.recoveryPoint.kind}</span></>
+            <div className="mt-1 space-y-0.5">
+              <div>
+                handoff: active=<span className="font-mono">{view.handoff.activeClusterId || "—"}</span> · epoch{" "}
+                {view.handoff.epoch} · phase <b>{view.handoff.phase}</b>
+                {view.handoff.releasedBy && <> · releasedBy {view.handoff.releasedBy}</>}
+              </div>
+              {view.handoff.recoveryPoint?.path ? (
+                <div>
+                  recovery point (<span className="font-mono">{view.handoff.recoveryPoint.kind}</span>):{" "}
+                  <span className="break-all font-mono">{view.handoff.recoveryPoint.path}</span>
+                </div>
+              ) : (
+                <div>recovery point: (none — target will use last-state)</div>
               )}
-              {view.handoff.releasedBy && <> · releasedBy {view.handoff.releasedBy}</>}
+              {view.handoff.updatedAt && (
+                <div>updated: {new Date(view.handoff.updatedAt).toLocaleString()}</div>
+              )}
             </div>
           ) : (
-            <div className="mt-1">handoff: (none)</div>
+            <div className="mt-1">
+              handoff: (none) — written on <b>Initialize / Release / Promote</b>. If you set the token
+              manually, click <b>Initialize (claim active)</b> to create it.
+            </div>
           )}
         </div>
       </CardContent>
