@@ -236,6 +236,13 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 
 > 要求已配置共享 S3（见 §7.1）。若按钮不出现，说明 token 已非 unset。
 
+> **关于 handoff 显示为 `(none)`**：HA 卡片的"Shared S3 coordination"块会显示交接记录
+> （active/epoch/phase/恢复点/updatedAt）。交接记录**只由 Initialize (claim)/Release/Promote 写入**——
+> 如果你是**手动**写的 token（`mc pipe .../active-cluster`），则只有 token、没有 handoff，页面显示
+> `handoff: (none)`；点 **Initialize (claim active)** 即可补写(token + handoff `epoch=1, phase=stable`)。
+> 另注意 handoff 路径默认已是 `fencing/<组名>/handoff`；若早期在旧路径 `fencing/handoff/<组名>` 写过，
+> 重新 Claim 一次会在新路径生成。
+
 ### 7.4 计划切换（两侧都活，只是跨集群网断）——A → B
 
 1. **在 A 侧 flinkui** 点某组的 **Release（让位）** → 勾选确认 → 执行：
