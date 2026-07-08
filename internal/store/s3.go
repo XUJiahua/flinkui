@@ -31,6 +31,7 @@ type RecoveryPoint struct {
 type Store struct {
 	client        *s3.Client
 	defaultBucket string // fallback bucket when a deployment dir is not provided
+	defaultPrefix string // base key prefix for shared-bucket isolation (fallbacks)
 }
 
 // httpClient returns an HTTP client for the S3 SDK. When insecure is set it
@@ -51,7 +52,8 @@ func New(ctx context.Context, cfg config.S3Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{client: client, defaultBucket: cfg.Bucket}, nil
+	bucket, prefix := cfg.BucketPrefix()
+	return &Store{client: client, defaultBucket: bucket, defaultPrefix: prefix}, nil
 }
 
 // buildClient constructs an S3 client for an S3/MinIO endpoint (path-style,
@@ -110,7 +112,9 @@ func (s *Store) ListRecoveryPoints(ctx context.Context, job, savepointsDir, chec
 }
 
 // resolve turns a possibly-empty s3:// dir URI into (bucket, keyPrefix). When
-// the URI is empty it uses the configured default bucket with fallbackKey.
+// the URI is empty it uses the configured default bucket with fallbackKey,
+// prefixed by defaultPrefix so a shared bucket stays path-isolated. Absolute
+// s3:// dirs configured on the deployment are used verbatim (no prefixing).
 func (s *Store) resolve(dirURI, fallbackKey string) (bucket, prefix string) {
 	if strings.HasPrefix(dirURI, "s3://") || strings.HasPrefix(dirURI, "s3a://") {
 		rest := dirURI
@@ -122,6 +126,9 @@ func (s *Store) resolve(dirURI, fallbackKey string) (bucket, prefix string) {
 			prefix = parts[1]
 		}
 		return bucket, ensureSlash(prefix)
+	}
+	if s.defaultPrefix != "" {
+		fallbackKey = s.defaultPrefix + "/" + strings.TrimPrefix(fallbackKey, "/")
 	}
 	return s.defaultBucket, ensureSlash(fallbackKey)
 }

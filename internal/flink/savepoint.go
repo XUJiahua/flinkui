@@ -52,7 +52,12 @@ func (s *Service) Savepoint(ctx context.Context, name string) (*SavepointResult,
 	// so the JobManager uses its configured default.
 	targetDir, _, _ := unstructured.NestedString(u.Object, "spec", "flinkConfiguration", "state.savepoints.dir")
 	if targetDir == "" && s.cfg.Cluster.S3.Bucket != "" {
-		targetDir = fmt.Sprintf("s3://%s/savepoints/%s", s.cfg.Cluster.S3.Bucket, s.cfg.JobName(dep))
+		bucket, prefix := s.cfg.Cluster.S3.BucketPrefix()
+		key := "savepoints/" + s.cfg.JobName(dep)
+		if prefix != "" {
+			key = prefix + "/" + key
+		}
+		targetDir = fmt.Sprintf("s3://%s/%s", bucket, key)
 	}
 	selector := fmt.Sprintf("app=%s,component=jobmanager", dep)
 	var body string

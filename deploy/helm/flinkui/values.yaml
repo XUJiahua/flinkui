@@ -49,6 +49,12 @@ s3:
   # Optional fallback bucket; recovery-point paths are otherwise read from each
   # deployment's state.savepoints.dir / state.checkpoints.dir.
   bucket: ""
+  # Optional base key prefix inside the bucket, so several flinkui instances can
+  # share one bucket and stay isolated by path (e.g. "tenant-a" => keys under
+  # tenant-a/...). The bucket value may also carry the path directly
+  # ("flink/tenant-a"); both forms are merged. Affects flinkui-owned keys only
+  # (fencing/handoff + fallback savepoint/checkpoint locations).
+  prefix: ""
   region: "us-east-1"
   pathStyle: true
   # Skip TLS verification for internal MinIO with a self-signed certificate.

@@ -120,7 +120,8 @@ can also be supplied with `-config path.yaml`.
 | `FKO_CLUSTER_KUBECONFIG` | _(empty)_ | kubeconfig path; empty ⇒ in-cluster |
 | `FKO_CLUSTER_CONTEXT` | _(empty)_ | kubeconfig context |
 | `FKO_CLUSTER_S3_ENDPOINT` | _(empty)_ | S3/MinIO endpoint |
-| `FKO_CLUSTER_S3_BUCKET` | _(empty)_ | bucket (savepoints/, checkpoints/) |
+| `FKO_CLUSTER_S3_BUCKET` | _(empty)_ | bucket (savepoints/, checkpoints/); may include a path to isolate a shared bucket, e.g. `flink/tenant-a` |
+| `FKO_CLUSTER_S3_PREFIX` | _(empty)_ | base key prefix inside the bucket for shared-bucket isolation (merged with any path in `_S3_BUCKET`) |
 | `FKO_CLUSTER_S3_ACCESS_KEY` / `_SECRET_KEY` | _(empty)_ | S3 credentials |
 | `FKO_CLUSTER_S3_PATH_STYLE` | `true` | path-style addressing (MinIO) |
 | `FKO_AUTH_USERNAME` | `admin` | login username |

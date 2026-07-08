@@ -29,6 +29,14 @@ type ClusterConfig struct {
 type S3Config struct {
 	Endpoint  string `mapstructure:"endpoint"`
 	Bucket    string `mapstructure:"bucket"`
+	// Prefix is an optional base key prefix inside the bucket, so several
+	// flinkui instances can share one bucket and stay isolated by path
+	// (e.g. prefix "tenant-a" => keys under tenant-a/...). As a convenience the
+	// Bucket value itself may carry a path suffix ("flink/tenant-a"), which is
+	// merged with Prefix. It only affects flinkui-owned keys (fencing/handoff
+	// and the fallback savepoint/checkpoint locations); absolute s3:// dirs
+	// configured on the deployment are used verbatim.
+	Prefix    string `mapstructure:"prefix"`
 	AccessKey string `mapstructure:"access_key"`
 	SecretKey string `mapstructure:"secret_key"`
 	Region    string `mapstructure:"region"`
@@ -37,6 +45,30 @@ type S3Config struct {
 	// that use a self-signed certificate. (TLS on/off is determined by the
 	// endpoint URL scheme; there is no separate use_ssl toggle.)
 	Insecure bool `mapstructure:"insecure"`
+}
+
+// BucketPrefix normalizes Bucket (which may itself carry a "/path" suffix) and
+// Prefix into a plain bucket name plus a cleaned base key prefix (no leading or
+// trailing slash; empty when none). Examples:
+//
+//	{Bucket: "flink"}                          => ("flink", "")
+//	{Bucket: "flink/tenant-a"}                 => ("flink", "tenant-a")
+//	{Bucket: "flink", Prefix: "tenant-a/sit"}  => ("flink", "tenant-a/sit")
+//	{Bucket: "flink/a", Prefix: "b"}           => ("flink", "a/b")
+func (s S3Config) BucketPrefix() (bucket, prefix string) {
+	b := strings.Trim(s.Bucket, "/")
+	parts := strings.SplitN(b, "/", 2)
+	bucket = parts[0]
+	var segs []string
+	if len(parts) == 2 {
+		if p := strings.Trim(parts[1], "/"); p != "" {
+			segs = append(segs, p)
+		}
+	}
+	if p := strings.Trim(s.Prefix, "/"); p != "" {
+		segs = append(segs, p)
+	}
+	return bucket, strings.Join(segs, "/")
 }
 
 // AuthConfig holds basic-auth credentials guarding the whole platform.
@@ -156,7 +188,7 @@ func Load(configFile string) (*Config, error) {
 		"cluster.name", "cluster.namespace", "cluster.kubeconfig", "cluster.context",
 		"cluster.s3.endpoint", "cluster.s3.bucket", "cluster.s3.access_key",
 		"cluster.s3.secret_key", "cluster.s3.region", "cluster.s3.path_style",
-		"cluster.s3.insecure",
+		"cluster.s3.insecure", "cluster.s3.prefix",
 		"auth.username", "auth.password", "auth.session_secret", "auth.cookie_secure",
 		"ha.self_cluster_id", "ha.default_peer_cluster_id", "ha.auto_all",
 	} {

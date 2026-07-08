@@ -49,18 +49,30 @@ type HandoffRecord struct {
 type Coord struct {
 	client *s3.Client
 	bucket string
+	prefix string // optional base key prefix for shared-bucket isolation
 }
 
 // NewCoord builds a coordination store for the given (shared) S3 config.
 func NewCoord(ctx context.Context, cfg config.S3Config) (*Coord, error) {
-	if cfg.Bucket == "" {
+	bucket, prefix := cfg.BucketPrefix()
+	if bucket == "" {
 		return nil, fmt.Errorf("s3 bucket not configured for fencing/handoff coordination")
 	}
 	client, err := buildClient(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &Coord{client: client, bucket: cfg.Bucket}, nil
+	return &Coord{client: client, bucket: bucket, prefix: prefix}, nil
+}
+
+// key applies the configured base prefix to a coordination key so several
+// flinkui instances can share a bucket without colliding.
+func (c *Coord) key(k string) string {
+	k = strings.TrimPrefix(k, "/")
+	if c.prefix == "" {
+		return k
+	}
+	return c.prefix + "/" + k
 }
 
 // ErrHandoffConflict is returned by conditional handoff writes when the object
@@ -72,7 +84,7 @@ var ErrHandoffConflict = errors.New("handoff record changed concurrently (CAS co
 func (c *Coord) getObject(ctx context.Context, key string) (body []byte, etag string, ok bool, err error) {
 	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
-		Key:    aws.String(key),
+		Key:    aws.String(c.key(key)),
 	})
 	if err != nil {
 		var nsk *s3types.NoSuchKey
@@ -107,7 +119,7 @@ func (c *Coord) putObject(ctx context.Context, key, contentType string, body []b
 func (c *Coord) putObjectCond(ctx context.Context, key, contentType string, body []byte, ifMatch, ifNoneMatch string) error {
 	in := &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
-		Key:         aws.String(key),
+		Key:         aws.String(c.key(key)),
 		Body:        bytes.NewReader(body),
 		ContentType: aws.String(contentType),
 	}
