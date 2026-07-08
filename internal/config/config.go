@@ -53,18 +53,19 @@ type AuthConfig struct {
 }
 
 // LocalHAGroup declares one decentralized HA group from THIS instance's point of
-// view: the local side it manages plus the peer's clusterId and the shared-S3
-// coordination keys (design failover-decentralized §7). The peer's flinkui runs
-// a mirror-image config. Only the local cluster's k8s is ever touched here.
+// view. Only `name` is required in the common case: namespace defaults to the
+// console's cluster namespace, deployment to DeploymentName(name), and
+// clusterId/peerClusterId to the instance-level ha.self_cluster_id /
+// ha.default_peer_cluster_id. Explicit fields override those defaults.
 type LocalHAGroup struct {
 	Name string `mapstructure:"name"`
-	// Local side (this cluster).
+	// Local side (this cluster) — optional; defaulted.
 	Namespace  string `mapstructure:"namespace"`
 	Deployment string `mapstructure:"deployment"`
 	ClusterID  string `mapstructure:"cluster_id"`
-	// Peer side (other cluster) — for display and handoff semantics only.
+	// Peer side (other cluster) — optional; defaulted.
 	PeerClusterID string `mapstructure:"peer_cluster_id"`
-	// Shared-S3 coordination keys.
+	// Shared-S3 coordination keys — optional; defaulted.
 	FencingKey   string `mapstructure:"fencing_key"`
 	NeutralToken string `mapstructure:"neutral_token"`
 	HandoffKey   string `mapstructure:"handoff_key"`
@@ -72,7 +73,15 @@ type LocalHAGroup struct {
 
 // HAConfig groups the decentralized HA declarations.
 type HAConfig struct {
-	Groups []LocalHAGroup `mapstructure:"groups"`
+	// SelfClusterID is this instance's fencing identity (token value when active).
+	SelfClusterID string `mapstructure:"self_cluster_id"`
+	// DefaultPeerClusterID is the peer clusterId applied to groups that don't set one.
+	DefaultPeerClusterID string `mapstructure:"default_peer_cluster_id"`
+	// AutoAll, when true, treats every FlinkDeployment in the cluster namespace as
+	// an HA group (resolved at runtime), using the instance-level defaults. Groups
+	// listed explicitly still apply (and override per name).
+	AutoAll bool           `mapstructure:"auto_all"`
+	Groups  []LocalHAGroup `mapstructure:"groups"`
 }
 
 // Default fencing/handoff settings mirroring scripts/failover.sh.
@@ -148,6 +157,7 @@ func Load(configFile string) (*Config, error) {
 		"cluster.s3.secret_key", "cluster.s3.region", "cluster.s3.path_style",
 		"cluster.s3.insecure",
 		"auth.username", "auth.password", "auth.session_secret", "auth.cookie_secure",
+		"ha.self_cluster_id", "ha.default_peer_cluster_id", "ha.auto_all",
 	} {
 		_ = v.BindEnv(key)
 	}
@@ -163,21 +173,48 @@ func Load(configFile string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
-	// Apply per-HA-group defaults (mirror scripts/failover.sh; handoff key
-	// defaults to fencing/handoff/<group>).
+	// Normalize + validate explicitly-declared HA groups.
 	for i := range cfg.HA.Groups {
-		g := &cfg.HA.Groups[i]
-		if g.FencingKey == "" {
-			g.FencingKey = DefaultFencingKey
-		}
-		if g.NeutralToken == "" {
-			g.NeutralToken = DefaultNeutralToken
-		}
-		if g.HandoffKey == "" {
-			g.HandoffKey = "fencing/handoff/" + g.Name
+		cfg.HA.Groups[i] = cfg.NormalizeGroup(cfg.HA.Groups[i])
+		g := cfg.HA.Groups[i]
+		if g.ClusterID == "" || g.PeerClusterID == "" {
+			return nil, fmt.Errorf("ha.groups[%q]: clusterId and peerClusterId are required "+
+				"(set them on the group or via ha.self_cluster_id / ha.default_peer_cluster_id)", g.Name)
 		}
 	}
+	if cfg.HA.AutoAll && (cfg.HA.SelfClusterID == "" || cfg.HA.DefaultPeerClusterID == "") {
+		return nil, fmt.Errorf("ha.auto_all requires ha.self_cluster_id and ha.default_peer_cluster_id")
+	}
 	return &cfg, nil
+}
+
+// NormalizeGroup fills a group's optional fields from instance-level defaults and
+// naming conventions: namespace <- cluster.namespace, deployment <-
+// DeploymentName(name), clusterId <- ha.self_cluster_id, peerClusterId <-
+// ha.default_peer_cluster_id, and fencing/neutral/handoff keys to defaults.
+func (c *Config) NormalizeGroup(g LocalHAGroup) LocalHAGroup {
+	if g.Namespace == "" {
+		g.Namespace = c.Cluster.Namespace
+	}
+	if g.Deployment == "" {
+		g.Deployment = c.DeploymentName(g.Name)
+	}
+	if g.ClusterID == "" {
+		g.ClusterID = c.HA.SelfClusterID
+	}
+	if g.PeerClusterID == "" {
+		g.PeerClusterID = c.HA.DefaultPeerClusterID
+	}
+	if g.FencingKey == "" {
+		g.FencingKey = DefaultFencingKey
+	}
+	if g.NeutralToken == "" {
+		g.NeutralToken = DefaultNeutralToken
+	}
+	if g.HandoffKey == "" {
+		g.HandoffKey = "fencing/handoff/" + g.Name
+	}
+	return g
 }
 
 // AllowedOriginList parses the comma-separated AllowedOrigins into a trimmed,

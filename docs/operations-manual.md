@@ -192,14 +192,22 @@ cluster:
   kubeconfig: ""                 # 集群内 SA
   s3: { endpoint: "https://minio...:9000", bucket: flink, access_key: ..., secret_key: ..., path_style: true, insecure: true }  # 共享存储
 ha:
+  self_cluster_id: cluster-a       # 本侧 fencing 身份（活跃时 token 写此值）
+  default_peer_cluster_id: cluster-b  # 对端（展示/交接语义）
+  # 组常见只需 name：namespace 默认 cluster.namespace，deployment 默认 前缀+name，
+  # cluster_id/peer_cluster_id 默认取上面的实例级值。
   groups:
-    - name: orders
-      namespace: flink-jobs
-      deployment: flink-sql-job-orders
-      cluster_id: cluster-a       # 我这侧（token 值）
-      peer_cluster_id: cluster-b  # 对端（仅展示/交接语义）
+    - name: i-20251209-halykbank-codes
+    - name: i-20251209-halykbank-limit-g
+    # 需要时逐组覆盖 namespace/deployment/cluster_id/peer_cluster_id
 ```
-对端 flinkui 用镜像配置（`cluster_id: cluster-b`，local 指向它自己的 deployment）。
+
+**全 namespace 纳管开关**：把 `groups` 换成 `auto_all: true`,即把该 namespace 下
+**所有** FlinkDeployment 自动当作 HA 组(运行期解析,身份用 `self_cluster_id`/
+`default_peer_cluster_id`);显式 `groups` 仍可并存并按 name 覆盖。
+
+对端 flinkui 用镜像配置(`self_cluster_id: cluster-b`,`default_peer_cluster_id: cluster-a`)。
+Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `ha.groups`(见 values-example-full.yaml)。
 
 ### 7.2 HA 页面（本地视角）
 

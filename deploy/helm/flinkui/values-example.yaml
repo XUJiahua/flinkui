@@ -36,9 +36,8 @@ service:
 # Optional: decentralized HA (see values-example-full.yaml / docs). Requires the
 # peer cluster's flinkui to run a mirror config against the same shared S3.
 # ha:
+#   selfClusterId: cluster-a
+#   defaultPeerClusterId: cluster-b
+#   autoAll: false          # or true to manage all jobs in the namespace
 #   groups:
-#     - name: orders
-#       namespace: flink-jobs
-#       deployment: flink-sql-job-orders
-#       clusterId: cluster-a
-#       peerClusterId: cluster-b
+#     - name: i-20251209-halykbank-codes

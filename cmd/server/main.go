@@ -84,7 +84,7 @@ func main() {
 	// Decentralized HA (failover-decentralized). Enabled when HA groups are
 	// declared; needs the shared S3 for the fencing token + handoff record.
 	var fo *failover.Service
-	if len(cfg.HA.Groups) > 0 {
+	if len(cfg.HA.Groups) > 0 || cfg.HA.AutoAll {
 		var coord *store.Coord
 		if cfg.Cluster.S3.Endpoint != "" || cfg.Cluster.S3.AccessKey != "" {
 			coord, err = store.NewCoord(context.Background(), cfg.Cluster.S3)
@@ -96,7 +96,7 @@ func main() {
 			log.Printf("warning: HA declared but S3 not configured; fencing/handoff unavailable")
 		}
 		fo = failover.NewService(cfg, coord, st)
-		log.Printf("decentralized HA enabled: %d group(s)", len(cfg.HA.Groups))
+		log.Printf("decentralized HA enabled: %d explicit group(s), autoAll=%v", len(cfg.HA.Groups), cfg.HA.AutoAll)
 	}
 
 	// Embedded frontend rooted at web/dist.

@@ -53,16 +53,74 @@ func (s *Service) localAccessor(ns string) (cluster.ClusterAccessor, error) {
 
 // Groups returns the declared HA group names.
 func (s *Service) Groups() []string {
-	out := make([]string, 0, len(s.cfg.HA.Groups))
-	for _, g := range s.cfg.HA.Groups {
+	gs := s.groupConfigs(context.Background())
+	out := make([]string, 0, len(gs))
+	for _, g := range gs {
 		out = append(out, g.Name)
 	}
 	return out
 }
 
+// autoGroups lists local FlinkDeployments and synthesizes normalized HA groups
+// for them (used when ha.auto_all is set). Name = JobName(deployment).
+func (s *Service) autoGroups(ctx context.Context) []config.LocalHAGroup {
+	acc, err := s.localAccessor(s.cfg.Cluster.Namespace)
+	if err != nil {
+		return nil
+	}
+	list, err := acc.ListFlinkDeployments(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]config.LocalHAGroup, 0, len(list.Items))
+	for i := range list.Items {
+		dep := list.Items[i].GetName()
+		out = append(out, s.cfg.NormalizeGroup(config.LocalHAGroup{
+			Name: s.cfg.JobName(dep), Deployment: dep,
+		}))
+	}
+	return out
+}
+
+// groupConfigs returns the effective HA groups: explicit declarations plus, when
+// ha.auto_all is set, every local FlinkDeployment (explicit wins by name).
+func (s *Service) groupConfigs(ctx context.Context) []config.LocalHAGroup {
+	seen := map[string]bool{}
+	out := make([]config.LocalHAGroup, 0, len(s.cfg.HA.Groups))
+	for _, g := range s.cfg.HA.Groups {
+		out = append(out, g)
+		seen[g.Name] = true
+	}
+	if s.cfg.HA.AutoAll {
+		for _, g := range s.autoGroups(ctx) {
+			if !seen[g.Name] {
+				out = append(out, g)
+				seen[g.Name] = true
+			}
+		}
+	}
+	return out
+}
+
+// resolveGroup finds a group config by name: explicit first, else (auto_all) a
+// local deployment whose JobName matches.
+func (s *Service) resolveGroup(ctx context.Context, name string) (config.LocalHAGroup, bool) {
+	if g, ok := s.cfg.HAGroupByName(name); ok {
+		return g, true
+	}
+	if s.cfg.HA.AutoAll {
+		for _, g := range s.autoGroups(ctx) {
+			if g.Name == name {
+				return g, true
+			}
+		}
+	}
+	return config.LocalHAGroup{}, false
+}
+
 // LocalView observes a single HA group from this instance's point of view.
 func (s *Service) LocalView(ctx context.Context, name string) (*LocalView, error) {
-	g, ok := s.cfg.HAGroupByName(name)
+	g, ok := s.resolveGroup(ctx, name)
 	if !ok {
 		return nil, fmt.Errorf("HA group %q not found", name)
 	}
@@ -81,14 +139,22 @@ func (s *Service) LocalView(ctx context.Context, name string) (*LocalView, error
 	return v, nil
 }
 
-// ListViews observes all declared HA groups.
+// ListViews observes all effective HA groups (explicit + auto_all).
 func (s *Service) ListViews(ctx context.Context) ([]*LocalView, error) {
-	out := make([]*LocalView, 0, len(s.cfg.HA.Groups))
-	for _, g := range s.cfg.HA.Groups {
-		v, err := s.LocalView(ctx, g.Name)
-		if err != nil {
-			return nil, err
+	gs := s.groupConfigs(ctx)
+	out := make([]*LocalView, 0, len(gs))
+	for _, g := range gs {
+		v := &LocalView{
+			Name:          g.Name,
+			ClusterID:     g.ClusterID,
+			PeerClusterID: g.PeerClusterID,
+			Namespace:     g.Namespace,
+			Deployment:    g.Deployment,
+			Local:         s.localStatus(ctx, g),
+			Fencing:       s.fencingState(ctx, g),
 		}
+		v.Handoff = s.readHandoff(ctx, g)
+		s.deriveRole(v, g)
 		out = append(out, v)
 	}
 	return out, nil

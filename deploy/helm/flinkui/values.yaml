@@ -64,24 +64,30 @@ extraEnv: []
 #    value: "x"
 
 # -- Decentralized HA / failover (failover-decentralized). ------------------
-# Declares the LOCAL primary/standby groups THIS instance participates in. Each
-# side's flinkui runs a mirror-image config and acts ONLY on its local cluster;
-# coordination is via the shared S3 fencing token + handoff record (enable s3
-# above with the SHARED store). When ha.groups is non-empty the chart renders a
-# ConfigMap and runs the binary with -config (env still overrides file values,
-# so only ha.* needs the file).
+# Each side's flinkui acts ONLY on its local cluster; coordination is via the
+# shared S3 fencing token + handoff record (enable s3 above with the SHARED
+# store). When groups is non-empty OR autoAll is true, the chart renders a
+# ConfigMap and runs the binary with -config (env still overrides addr/auth/
+# cluster/s3, so only ha.* needs the file).
 ha:
-  # groups: []  # (empty => failover UI disabled)
+  # This instance's fencing identity (token value when active) and the peer's.
+  # Required when using autoAll or groups without per-group clusterId/peerClusterId.
+  selfClusterId: ""          # e.g. cluster-a
+  defaultPeerClusterId: ""   # e.g. cluster-b
+  # autoAll: manage EVERY FlinkDeployment in the namespace as an HA group
+  # (resolved at runtime), using the identities above. Explicit groups still apply.
+  autoAll: false
+  # Explicit groups. In the common case each entry is just `- name: <job>`;
+  # namespace defaults to config.targetNamespace, deployment to prefix+name,
+  # clusterId/peerClusterId to the instance-level values above.
   groups: []
-  #  - name: orders
-  #    namespace: flink-jobs            # local namespace
-  #    deployment: flink-sql-job-orders # local deployment
-  #    clusterId: cluster-a             # this side's clusterId (token value when active)
-  #    peerClusterId: cluster-b         # the other side (display + handoff)
-  #    # optional (defaults shown):
-  #    # fencingKey: fencing/active-cluster
-  #    # neutralToken: __switching__
-  #    # handoffKey: fencing/handoff/orders
+  #  - name: orders                    # => deployment flink-sql-job-orders, ns targetNamespace
+  #  - name: special                   # per-group overrides (optional):
+  #    namespace: other-ns
+  #    deployment: custom-name
+  #    clusterId: cluster-a
+  #    peerClusterId: cluster-c
+  #    # fencingKey / neutralToken / handoffKey also overridable
 
 serviceAccount:
   create: true

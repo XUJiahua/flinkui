@@ -101,15 +101,15 @@ func (s *Service) GetTask(id string) (*HATask, bool) { return s.tasks.get(id) }
 // fencing/observation is consistent. It does not force a redeploy (unlike
 // Promote), so it is safe to run against an already-running active side.
 func (s *Service) Claim(name string) error {
-	g, ok := s.cfg.HAGroupByName(name)
-	if !ok {
-		return fmt.Errorf("HA group %q not found", name)
-	}
 	if s.coord == nil {
 		return fmt.Errorf("S3 coordination not configured; cannot Claim")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	g, ok := s.resolveGroup(ctx, name)
+	if !ok {
+		return fmt.Errorf("HA group %q not found", name)
+	}
 
 	if err := s.coord.WriteToken(ctx, g.FencingKey, g.ClusterID); err != nil {
 		return err
@@ -138,7 +138,9 @@ func (s *Service) failTask(id, step string, err error) {
 // Release performs the source-side, LOCAL-only step-down: savepoint (if healthy)
 // -> suspend -> wait local JM pod=0 -> neutral token -> write handoff(released).
 func (s *Service) Release(name string) (*HATask, error) {
-	g, ok := s.cfg.HAGroupByName(name)
+	rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
+	g, ok := s.resolveGroup(rctx, name)
+	rcancel()
 	if !ok {
 		return nil, fmt.Errorf("HA group %q not found", name)
 	}
@@ -244,7 +246,9 @@ func (s *Service) writeReleasedHandoff(ctx context.Context, g config.LocalHAGrou
 // token->self (epoch+1) -> start local -> verify. force skips the "peer released"
 // guard (disaster) and then requires ackDataLoss.
 func (s *Service) Promote(name string, force, ackDataLoss bool) (*HATask, error) {
-	g, ok := s.cfg.HAGroupByName(name)
+	rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
+	g, ok := s.resolveGroup(rctx, name)
+	rcancel()
 	if !ok {
 		return nil, fmt.Errorf("HA group %q not found", name)
 	}

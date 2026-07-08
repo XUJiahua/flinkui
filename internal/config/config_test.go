@@ -125,3 +125,71 @@ ha:
 		t.Errorf("overrides lost: %+v", g2)
 	}
 }
+
+func TestHAGroupDefaultsFromInstanceLevel(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "c.yaml")
+	// Only `name` per group; identities come from ha.self/default_peer.
+	yaml := `
+cluster: { name: cluster-a, namespace: flink-jobs }
+deployment_prefix: "flink-sql-job-"
+ha:
+  self_cluster_id: cluster-a
+  default_peer_cluster_id: cluster-b
+  groups:
+    - name: codes
+`
+	if err := os.WriteFile(file, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(file)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	g, _ := cfg.HAGroupByName("codes")
+	if g.Namespace != "flink-jobs" {
+		t.Errorf("namespace default = %q", g.Namespace)
+	}
+	if g.Deployment != "flink-sql-job-codes" {
+		t.Errorf("deployment default = %q", g.Deployment)
+	}
+	if g.ClusterID != "cluster-a" || g.PeerClusterID != "cluster-b" {
+		t.Errorf("identity defaults wrong: %+v", g)
+	}
+	if g.HandoffKey != "fencing/handoff/codes" {
+		t.Errorf("handoff default = %q", g.HandoffKey)
+	}
+}
+
+func TestHAGroupMissingIdentityErrors(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "c.yaml")
+	yaml := `
+cluster: { name: cluster-a, namespace: flink-jobs }
+ha:
+  groups:
+    - name: codes   # no cluster_id / peer, and no instance defaults => error
+`
+	if err := os.WriteFile(file, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(file); err == nil {
+		t.Fatal("expected error for missing clusterId/peerClusterId")
+	}
+}
+
+func TestHAAutoAllRequiresIdentities(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "c.yaml")
+	yaml := `
+cluster: { name: cluster-a, namespace: flink-jobs }
+ha:
+  auto_all: true    # without self/default_peer => error
+`
+	if err := os.WriteFile(file, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(file); err == nil {
+		t.Fatal("expected error for auto_all without identities")
+	}
+}

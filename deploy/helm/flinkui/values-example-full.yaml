@@ -116,17 +116,19 @@ podAnnotations: {}
 podLabels: {}
 
 # -- 去中心主从切换 / decentralized HA（可选） -----------------------------
-# 声明本实例参与的本地主从组（每侧 flinkui 用镜像对称配置，只操作本地集群，
-# 通过上面 s3 配置的共享存储做 fencing/交接协调）。非空时 chart 会渲染 ConfigMap
-# 并以 -config 启动（env 仍覆盖文件里的 addr/auth/cluster/s3）。需 s3.enabled=true。
+# 身份提到实例级：selfClusterId / defaultPeerClusterId。组条目常见只需 name
+# （namespace 默认 targetNamespace，deployment 默认 前缀+name）。需 s3.enabled=true。
 ha:
+  selfClusterId: cluster-a
+  defaultPeerClusterId: cluster-b
+  # autoAll: true 时把该 namespace 下所有 FlinkDeployment 都当 HA 组（运行期解析）
+  autoAll: false
   groups:
-    - name: orders
-      namespace: flink-jobs            # 本地 namespace
-      deployment: flink-sql-job-orders # 本地 deployment
-      clusterId: cluster-a             # 我这侧的 clusterId（活跃时 token 写此值）
-      peerClusterId: cluster-b         # 对端（展示 + 交接语义）
-      # 可选（默认值）：
-      # fencingKey: fencing/active-cluster
-      # neutralToken: __switching__
-      # handoffKey: fencing/handoff/orders
+    - name: i-20251209-halykbank-codes
+    - name: i-20251209-halykbank-limit-g
+    # 需要时逐组覆盖：
+    # - name: special
+    #   namespace: other-ns
+    #   deployment: custom-name
+    #   peerClusterId: cluster-c
+

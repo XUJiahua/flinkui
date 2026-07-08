@@ -1,4 +1,4 @@
-{{- if .Values.ha.groups }}
+{{- if or .Values.ha.groups .Values.ha.autoAll }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,13 +11,28 @@ data:
     # Rendered by the Helm chart. Only ha.* is provided here; addr/auth/cluster/s3
     # come from FKO_* env vars, which override config-file values.
     ha:
+      {{- with .Values.ha.selfClusterId }}
+      self_cluster_id: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.ha.defaultPeerClusterId }}
+      default_peer_cluster_id: {{ . | quote }}
+      {{- end }}
+      auto_all: {{ .Values.ha.autoAll | default false }}
       groups:
         {{- range .Values.ha.groups }}
         - name: {{ .name | quote }}
-          namespace: {{ .namespace | quote }}
-          deployment: {{ .deployment | quote }}
-          cluster_id: {{ .clusterId | quote }}
-          peer_cluster_id: {{ .peerClusterId | quote }}
+          {{- with .namespace }}
+          namespace: {{ . | quote }}
+          {{- end }}
+          {{- with .deployment }}
+          deployment: {{ . | quote }}
+          {{- end }}
+          {{- with .clusterId }}
+          cluster_id: {{ . | quote }}
+          {{- end }}
+          {{- with .peerClusterId }}
+          peer_cluster_id: {{ . | quote }}
+          {{- end }}
           {{- with .fencingKey }}
           fencing_key: {{ . | quote }}
           {{- end }}
