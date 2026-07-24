@@ -21,7 +21,7 @@ var FlinkDeploymentGVR = schema.GroupVersionResource{
 type PodInfo struct {
 	Name      string `json:"name"`
 	Phase     string `json:"phase"`
-	Ready     string `json:"ready"`     // e.g. "1/1"
+	Ready     string `json:"ready"` // e.g. "1/1"
 	Restarts  int32  `json:"restarts"`
 	Component string `json:"component"` // jobmanager / taskmanager (from label)
 	NodeName  string `json:"nodeName"`
@@ -77,6 +77,17 @@ type ClusterAccessor interface {
 
 	// ListEvents returns recent events for the involved object name.
 	ListEvents(ctx context.Context, involvedObjectName string) ([]EventInfo, error)
+}
+
+// SecretAccessor is an optional interface for accessors that can read/write
+// Kubernetes Secrets in the managed namespace. Implemented by KubeAccessor.
+// Used by the OpenBao/Vault secret-sync loop (internal/secretsync) so the
+// business logic does not depend on client-go directly.
+type SecretAccessor interface {
+	// GetSecret returns the Secret's data (nil map if the Secret does not exist).
+	GetSecret(ctx context.Context, name string) (map[string][]byte, bool, error)
+	// ApplySecret creates or updates an Opaque Secret with the given data.
+	ApplySecret(ctx context.Context, name string, data map[string][]byte) error
 }
 
 // Starter is an optional interface for accessors that run background machinery

@@ -9,6 +9,7 @@ import (
 	"github.com/fko-demo/flinkui/internal/config"
 	"github.com/fko-demo/flinkui/internal/failover"
 	"github.com/fko-demo/flinkui/internal/flink"
+	"github.com/fko-demo/flinkui/internal/secretsync"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/gin-gonic/gin"
 )
@@ -18,7 +19,8 @@ type Handlers struct {
 	svc   *flink.Service
 	store *store.Store // may be nil if S3 not configured
 	cfg   *config.Config
-	fo    *failover.Service // decentralized HA (nil if no HA groups)
+	fo    *failover.Service  // decentralized HA (nil if no HA groups)
+	ss    *secretsync.Syncer // OpenBao secret-sync (nil if disabled)
 }
 
 // listJobs handles GET /api/jobs.

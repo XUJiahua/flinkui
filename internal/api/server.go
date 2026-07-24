@@ -9,6 +9,7 @@ import (
 	"github.com/fko-demo/flinkui/internal/config"
 	"github.com/fko-demo/flinkui/internal/failover"
 	"github.com/fko-demo/flinkui/internal/flink"
+	"github.com/fko-demo/flinkui/internal/secretsync"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/gin-gonic/gin"
 )
@@ -20,11 +21,11 @@ type Server struct {
 }
 
 // New builds the HTTP server: API routes, auth, WebSocket, and SPA static serving.
-func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.Service, a *auth.Auth, staticFS fs.FS) *Server {
+func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.Service, ss *secretsync.Syncer, a *auth.Auth, staticFS fs.FS) *Server {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
-	h := &Handlers{svc: svc, store: st, cfg: cfg, fo: fo}
+	h := &Handlers{svc: svc, store: st, cfg: cfg, fo: fo, ss: ss}
 	hub := newStatusHub(h, a, cfg.StatusPollSec)
 
 	// Public health endpoints (no auth) for liveness/readiness probes.
@@ -67,6 +68,10 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.S
 		api.POST("/ha/:name/release", h.release)
 		api.POST("/ha/:name/promote", h.promote)
 		api.GET("/ha-tasks/:id", h.getHATask)
+
+		// OpenBao/Vault secret-sync (no ESO): status + manual trigger.
+		api.GET("/secretsync", h.secretSyncStatus)
+		api.POST("/secretsync/sync", h.secretSyncNow)
 	}
 
 	// WebSocket status stream (auth handled inside via cookie).

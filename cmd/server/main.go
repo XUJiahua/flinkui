@@ -15,6 +15,7 @@ import (
 	"github.com/fko-demo/flinkui/internal/config"
 	"github.com/fko-demo/flinkui/internal/failover"
 	"github.com/fko-demo/flinkui/internal/flink"
+	"github.com/fko-demo/flinkui/internal/secretsync"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/fko-demo/flinkui/web"
 )
@@ -99,13 +100,33 @@ func main() {
 		log.Printf("decentralized HA enabled: %d explicit group(s), autoAll=%v", len(cfg.HA.Groups), cfg.HA.AutoAll)
 	}
 
+	// OpenBao/Vault secret-sync (no ESO). Optional; requires the KubeAccessor
+	// (Secret read/write) and secret_sync.enabled with items configured.
+	var ss *secretsync.Syncer
+	if sa, ok := acc.(secretsync.Accessor); ok {
+		ss, err = secretsync.New(sa, cfg.SecretSync)
+		if err != nil {
+			log.Printf("warning: secret-sync disabled: %v", err)
+			ss = nil
+		} else if ss != nil {
+			if fo != nil {
+				// HA interlock: only restart the active side, never mid-switch.
+				ss.SetRestartGuard(fo)
+			}
+			go ss.Run(context.Background())
+			log.Printf("secret-sync enabled: %d item(s)", len(cfg.SecretSync.Items))
+		}
+	} else if cfg.SecretSync.Enabled {
+		log.Printf("warning: secret-sync enabled but accessor does not support Secret read/write")
+	}
+
 	// Embedded frontend rooted at web/dist.
 	staticFS, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
 		log.Fatalf("mount embedded frontend: %v", err)
 	}
 
-	srv := api.New(cfg, svc, st, fo, a, staticFS)
+	srv := api.New(cfg, svc, st, fo, ss, a, staticFS)
 	log.Printf("Flink job console %s listening on %s (cluster=%s namespace=%s)",
 		version, cfg.Addr, cfg.Cluster.Name, cfg.Cluster.Namespace)
 	if err := srv.Run(); err != nil {

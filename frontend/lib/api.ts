@@ -11,6 +11,7 @@ import type {
   LogComponent,
   Operation,
   RecoveryPoint,
+  SecretSyncStatus,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
@@ -114,6 +115,10 @@ export const api = {
       body: JSON.stringify({ confirm: true, force, ackDataLoss }),
     }),
   getHATask: (id: string) => request<HATask>(`/api/ha-tasks/${encodeURIComponent(id)}`),
+
+  // OpenBao/Vault secret-sync (no ESO).
+  secretSyncStatus: () => request<SecretSyncStatus>("/api/secretsync"),
+  secretSyncNow: () => request<SecretSyncStatus>("/api/secretsync/sync", { method: "POST" }),
 };
 
 /** pollHATask polls a release/promote task until it finishes (or times out). */

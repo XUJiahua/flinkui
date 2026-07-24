@@ -163,3 +163,10 @@ securityContext:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# OpenBao/Vault secret-sync (no ESO). When enabled, the console keeps the
+# flink-* Secrets in sync from OpenBao and can restart jobs on change. The
+# console ServiceAccount also gets secrets get/create/update/patch (see rbac).
+# App-level config is via FKO_SECRET_SYNC_* env / config file (see README).
+secretSync:
+  enabled: false

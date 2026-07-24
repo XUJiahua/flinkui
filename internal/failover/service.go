@@ -227,6 +227,32 @@ func (s *Service) readHandoff(ctx context.Context, g config.LocalHAGroup) *store
 
 // deriveRole sets Role and a local-inconsistency Warning from the token and the
 // local job state (the peer side is not observed cross-cluster).
+// SafeToRestart reports whether the FlinkDeployment dep may be restarted right
+// now by the secret-sync loop. A deployment that is NOT part of any HA group is
+// always safe. For an HA-managed deployment it is safe ONLY when this console's
+// local side is the active owner AND the local job is healthy — never on the
+// standby side (its job should stay stopped) and never mid-switch (neutral
+// token). reason explains a false result.
+func (s *Service) SafeToRestart(ctx context.Context, dep string) (bool, string) {
+	for _, g := range s.groupConfigs(ctx) {
+		if g.Deployment != dep {
+			continue
+		}
+		v, err := s.LocalView(ctx, g.Name)
+		if err != nil {
+			return false, "HA view error: " + err.Error()
+		}
+		if v.Role != RoleActive {
+			return false, "HA role=" + v.Role + " (secret-sync restarts only the active side)"
+		}
+		if v.Local == nil || !v.Local.Healthy {
+			return false, "HA active but local job is not RUNNING/STABLE"
+		}
+		return true, ""
+	}
+	return true, "" // not an HA-managed deployment
+}
+
 func (s *Service) deriveRole(v *LocalView, g config.LocalHAGroup) {
 	localRunning := v.Local != nil && v.Local.Healthy
 	switch v.Fencing.PointsTo {
