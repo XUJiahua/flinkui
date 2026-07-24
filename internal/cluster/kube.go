@@ -31,7 +31,7 @@ type KubeAccessor struct {
 	namespace string
 
 	restCfg   *rest.Config
-	clientset *kubernetes.Clientset
+	clientset kubernetes.Interface
 	dynClient dynamic.Interface
 
 	// Informer-backed cache for FlinkDeployments (design §3.3: watch/informer
@@ -327,21 +327,35 @@ func (k *KubeAccessor) ListEvents(ctx context.Context, involvedObjectName string
 	if err != nil {
 		return nil, err
 	}
-	out := make([]EventInfo, 0, len(list.Items))
+	type eventWithTime struct {
+		info EventInfo
+		last time.Time
+	}
+	events := make([]eventWithTime, 0, len(list.Items))
 	for i := range list.Items {
 		e := &list.Items[i]
 		last := e.LastTimestamp.Time
 		if last.IsZero() {
 			last = e.EventTime.Time
 		}
-		out = append(out, EventInfo{
-			Type:     e.Type,
-			Reason:   e.Reason,
-			Message:  e.Message,
-			Count:    e.Count,
-			LastSeen: age(last) + " ago",
+		events = append(events, eventWithTime{
+			info: EventInfo{
+				Type:     e.Type,
+				Reason:   e.Reason,
+				Message:  e.Message,
+				Count:    e.Count,
+				LastSeen: age(last) + " ago",
+			},
+			last: last,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen > out[j].LastSeen })
+	// Sort by the actual event timestamp, most recent first. Sorting on the
+	// formatted LastSeen string would order lexically (e.g. "9m ago" > "10m ago"),
+	// which does not match chronological order.
+	sort.Slice(events, func(i, j int) bool { return events[i].last.After(events[j].last) })
+	out := make([]EventInfo, len(events))
+	for i := range events {
+		out[i] = events[i].info
+	}
 	return out, nil
 }
