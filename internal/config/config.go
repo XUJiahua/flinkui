@@ -27,8 +27,8 @@ type ClusterConfig struct {
 
 // S3Config holds S3/MinIO connection info for recovery-point listing.
 type S3Config struct {
-	Endpoint  string `mapstructure:"endpoint"`
-	Bucket    string `mapstructure:"bucket"`
+	Endpoint string `mapstructure:"endpoint"`
+	Bucket   string `mapstructure:"bucket"`
 	// Prefix is an optional base key prefix inside the bucket, so several
 	// flinkui instances can share one bucket and stay isolated by path
 	// (e.g. prefix "tenant-a" => keys under tenant-a/...). As a convenience the
@@ -123,6 +123,46 @@ const (
 	DefaultNeutralToken = "__switching__"
 )
 
+// OpenBaoConfig describes how to reach OpenBao/Vault for the secret-sync loop
+// (mirrors the org contract used by the self-developed apps: KV v2 + K8s auth).
+type OpenBaoConfig struct {
+	// Addr is the OpenBao/Vault address, e.g. http://vault.vault.svc:8200.
+	Addr string `mapstructure:"addr"`
+	// Namespace is the Vault Enterprise namespace (empty for OpenBao OSS).
+	Namespace string `mapstructure:"namespace"`
+	// KVMount is the KV v2 mount name (e.g. "kv"); the loop reads <mount>/data/<path>.
+	KVMount string `mapstructure:"kv_mount"`
+	// AuthMount is the Kubernetes auth mount (e.g. "kubernetes").
+	AuthMount string `mapstructure:"auth_mount"`
+	// Role is the Kubernetes auth role bound to this pod's ServiceAccount.
+	Role string `mapstructure:"role"`
+	// Token is a static token for local/debug use; empty => K8s auth via SA token.
+	Token string `mapstructure:"token"`
+	// CACert is a path to the OpenBao CA file (https self-signed); empty for http.
+	CACert string `mapstructure:"cacert"`
+}
+
+// SecretSyncItem maps one Vault KV path to one Kubernetes Secret, and optionally
+// names a FlinkDeployment to restart when the synced values change.
+type SecretSyncItem struct {
+	// SecretName is the target K8s Secret (e.g. flink-s3-credentials).
+	SecretName string `mapstructure:"secret_name"`
+	// KVPath is the KV v2 path under the mount (e.g. config/cil/flink/vault-a/s3).
+	KVPath string `mapstructure:"kv_path"`
+	// RestartDeployment is the FlinkDeployment to restart on change (empty => none).
+	RestartDeployment string `mapstructure:"restart_deployment"`
+}
+
+// SecretSyncConfig configures the in-process OpenBao->Secret sync loop
+// (internal/secretsync). Disabled unless Enabled is true and Items are set.
+type SecretSyncConfig struct {
+	Enabled     bool             `mapstructure:"enabled"`
+	IntervalSec int              `mapstructure:"interval_sec"`
+	AutoRestart bool             `mapstructure:"auto_restart"`
+	OpenBao     OpenBaoConfig    `mapstructure:"openbao"`
+	Items       []SecretSyncItem `mapstructure:"items"`
+}
+
 // Config is the top-level platform configuration.
 type Config struct {
 	// Addr is the HTTP listen address, e.g. ":8080".
@@ -152,6 +192,11 @@ type Config struct {
 	// HA declares decentralized primary/standby groups this instance participates
 	// in (design failover-decentralized). Empty => failover UI disabled.
 	HA HAConfig `mapstructure:"ha"`
+
+	// SecretSync configures the OpenBao/Vault -> K8s Secret sync loop (no ESO).
+	// Disabled by default; enable to have the console keep flink-s3-credentials /
+	// flink-job-env in sync and (optionally) restart jobs on change.
+	SecretSync SecretSyncConfig `mapstructure:"secret_sync"`
 }
 
 // Load reads configuration from env vars (prefix FKO_) and an optional file.
@@ -172,6 +217,12 @@ func Load(configFile string) (*Config, error) {
 	v.SetDefault("cluster.s3.path_style", true)
 	v.SetDefault("auth.username", "admin")
 	v.SetDefault("auth.session_secret", "change-me-please")
+	v.SetDefault("secret_sync.enabled", false)
+	v.SetDefault("secret_sync.interval_sec", 300)
+	v.SetDefault("secret_sync.auto_restart", false)
+	v.SetDefault("secret_sync.openbao.kv_mount", "kv")
+	v.SetDefault("secret_sync.openbao.auth_mount", "kubernetes")
+	v.SetDefault("secret_sync.openbao.role", "vault-app-role")
 
 	// Env binding: FKO_ prefix, nested keys via underscore.
 	v.SetEnvPrefix("FKO")
@@ -191,6 +242,10 @@ func Load(configFile string) (*Config, error) {
 		"cluster.s3.insecure", "cluster.s3.prefix",
 		"auth.username", "auth.password", "auth.session_secret", "auth.cookie_secure",
 		"ha.self_cluster_id", "ha.default_peer_cluster_id", "ha.auto_all",
+		"secret_sync.enabled", "secret_sync.interval_sec", "secret_sync.auto_restart",
+		"secret_sync.openbao.addr", "secret_sync.openbao.namespace", "secret_sync.openbao.kv_mount",
+		"secret_sync.openbao.auth_mount", "secret_sync.openbao.role", "secret_sync.openbao.token",
+		"secret_sync.openbao.cacert",
 	} {
 		_ = v.BindEnv(key)
 	}

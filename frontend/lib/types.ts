@@ -166,3 +166,23 @@ export interface HATask {
   startedAt: string;
   finishedAt?: string;
 }
+
+export interface SecretSyncItemStatus {
+  secretName: string;
+  kvPath: string;
+  restartDeployment?: string;
+  ok: boolean;
+  keys: number;
+  error?: string;
+}
+
+export interface SecretSyncStatus {
+  enabled: boolean;
+  autoRestart?: boolean;
+  intervalSec?: number;
+  lastSyncUnix?: number;
+  running?: boolean;
+  items?: SecretSyncItemStatus[];
+  restarts?: Record<string, number>;
+  skipped?: Record<string, string>;
+}

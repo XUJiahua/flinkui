@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -154,6 +155,40 @@ func (k *KubeAccessor) ListFlinkDeployments(ctx context.Context) (*unstructured.
 
 func (k *KubeAccessor) PatchFlinkDeployment(ctx context.Context, name string, mergePatch []byte) error {
 	_, err := k.fd().Patch(ctx, name, types.MergePatchType, mergePatch, metav1.PatchOptions{})
+	return err
+}
+
+// GetSecret returns the Secret's data map, and false if the Secret is absent.
+// Implements cluster.SecretAccessor.
+func (k *KubeAccessor) GetSecret(ctx context.Context, name string) (map[string][]byte, bool, error) {
+	sec, err := k.clientset.CoreV1().Secrets(k.namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return sec.Data, true, nil
+}
+
+// ApplySecret creates or updates an Opaque Secret with the given data.
+// Implements cluster.SecretAccessor.
+func (k *KubeAccessor) ApplySecret(ctx context.Context, name string, data map[string][]byte) error {
+	secrets := k.clientset.CoreV1().Secrets(k.namespace)
+	existing, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = secrets.Create(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: k.namespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data:       data,
+		}, metav1.CreateOptions{})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	existing.Data = data
+	_, err = secrets.Update(ctx, existing, metav1.UpdateOptions{})
 	return err
 }
 

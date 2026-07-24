@@ -26,6 +26,12 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list"]
+  {{- if .Values.secretSync.enabled }}
+  # OpenBao/Vault secret-sync writes the flink-* Secrets (no ESO).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

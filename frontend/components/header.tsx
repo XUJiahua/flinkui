@@ -36,6 +36,9 @@ export function Header() {
           <Link href="/ha" className="text-muted-foreground hover:text-foreground">
             HA
           </Link>
+          <Link href="/secretsync" className="text-muted-foreground hover:text-foreground">
+            Secrets
+          </Link>
         </nav>
         <div className="flex items-center gap-4 text-sm text-muted-foreground">
           {degraded && (

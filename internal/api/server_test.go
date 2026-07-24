@@ -50,6 +50,12 @@ func (fakeAccessor) ListEvents(_ context.Context, _ string) ([]cluster.EventInfo
 	return nil, nil
 }
 
+// Secret methods so fakeAccessor also satisfies secretsync.Accessor.
+func (fakeAccessor) GetSecret(_ context.Context, _ string) (map[string][]byte, bool, error) {
+	return nil, false, nil
+}
+func (fakeAccessor) ApplySecret(_ context.Context, _ string, _ map[string][]byte) error { return nil }
+
 func fakeDeployment(name string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "flink.apache.org/v1beta1",
@@ -82,7 +88,7 @@ func testServer(t *testing.T) http.Handler {
 	staticFS := fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<html>console</html>")},
 	}
-	return New(cfg, svc, nil, nil, a, staticFS).Handler()
+	return New(cfg, svc, nil, nil, nil, a, staticFS).Handler()
 }
 
 func login(t *testing.T, h http.Handler) string {

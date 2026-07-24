@@ -87,6 +87,11 @@ func (s *statusHub) handle(c *gin.Context) {
 		if err != nil {
 			payload = gin.H{"error": err.Error()}
 		}
+		// Include OpenBao secret-sync status in the same frame so the Secrets
+		// page can render live without a separate REST poll.
+		if s.h.ss != nil {
+			payload["secretSync"] = s.h.ss.Status()
+		}
 		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		return conn.WriteJSON(payload) == nil
 	}
