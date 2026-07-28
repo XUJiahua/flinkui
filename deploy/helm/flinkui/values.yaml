@@ -198,3 +198,20 @@ affinity: {}
 # App-level config is via FKO_SECRET_SYNC_* env / config file (see README).
 secretSync:
   enabled: false
+
+# Replay from timestamp (out-of-band SQL ConfigMap + FlinkDeployment spec edits).
+# OFF by default: it rewrites the job's Kafka source SQL and forces a stateless
+# restart, so it must be used deliberately and only where the target is NOT
+# continuously reconciled by GitOps (Argo/Flux would revert the live edit).
+# When enabled the ServiceAccount also gets configmaps get/list/patch (see rbac).
+# See docs/replay-from-timestamp-design.md.
+replay:
+  enabled: false
+  # Mark the target as GitOps-managed: mutating replay calls then require an
+  # explicit confirmDrift, and the UI shows a drift warning.
+  gitopsManaged: false
+  # podTemplate volume that mounts the SQL ConfigMap (the ConfigMap name is read
+  # from the CR, not derived from a naming convention).
+  sqlVolumeName: "sql-scripts"
+  # ConfigMap data key holding the job SQL.
+  sqlFileKey: "job.sql"

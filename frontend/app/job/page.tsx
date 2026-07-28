@@ -10,6 +10,7 @@ import { useAuthGuard } from "@/lib/use-auth";
 import { Header } from "@/components/header";
 import { StatusBadge } from "@/components/status-badge";
 import { LifecycleActions } from "@/components/lifecycle-actions";
+import { ReplayPanel } from "@/components/replay-panel";
 import { LogsViewer } from "@/components/logs-viewer";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,7 @@ function JobDetail({ name }: { name: string }) {
     refetchInterval: 5000,
     enabled: !!name,
   });
+  const cluster = useQuery({ queryKey: ["cluster"], queryFn: () => api.cluster() });
 
   const openFlinkUi = async () => {
     try {
@@ -85,6 +87,7 @@ function JobDetail({ name }: { name: string }) {
           </CardHeader>
           <CardContent className="space-y-4">
             <LifecycleActions jobName={name} size="default" />
+            <ReplayPanel jobName={name} cluster={cluster.data} />
             <dl className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
               <Field label="Job State" value={d?.jobState} />
               <Field label="Lifecycle" value={d?.lifecycleState} />

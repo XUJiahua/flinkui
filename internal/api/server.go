@@ -72,6 +72,16 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.S
 		// OpenBao/Vault secret-sync (no ESO): status + manual trigger.
 		api.GET("/secretsync", h.secretSyncStatus)
 		api.POST("/secretsync/sync", h.secretSyncNow)
+
+		// Replay from timestamp (out-of-band SQL + spec writes). Opt-in: only
+		// wired when explicitly enabled (docs/replay-from-timestamp-design.md).
+		if cfg.Replay.Enabled {
+			api.GET("/jobs/:name/sql", h.getSQL)
+			api.GET("/jobs/:name/replay", h.getReplay)
+			api.POST("/jobs/:name/replay/preview", h.replayPreview)
+			api.POST("/jobs/:name/replay", h.startReplay)
+			api.POST("/jobs/:name/replay/revert", h.revertReplay)
+		}
 	}
 
 	// WebSocket status stream (auth handled inside via cookie).

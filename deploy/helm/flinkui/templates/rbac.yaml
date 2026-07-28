@@ -32,6 +32,12 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "create", "update", "patch"]
   {{- end }}
+  {{- if .Values.replay.enabled }}
+  # Replay from timestamp reads/edits the SQL ConfigMap.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

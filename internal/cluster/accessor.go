@@ -90,6 +90,22 @@ type SecretAccessor interface {
 	ApplySecret(ctx context.Context, name string, data map[string][]byte) error
 }
 
+// ConfigMapAccessor is an optional interface for accessors that can read/write
+// ConfigMaps in the managed namespace. Implemented by KubeAccessor. Used by the
+// replay-from-timestamp feature (internal/flink) to read/edit the job SQL that
+// is delivered as a ConfigMap volume.
+type ConfigMapAccessor interface {
+	// GetConfigMap returns the ConfigMap's data (nil map + found=false if absent).
+	GetConfigMap(ctx context.Context, name string) (data map[string]string, found bool, err error)
+	// PatchConfigMapKey creates-or-updates a single data key, leaving other keys
+	// intact (a strategic-merge patch on data.<key>), so multi-file ConfigMaps
+	// are not clobbered.
+	PatchConfigMapKey(ctx context.Context, name, key, value string) error
+	// DeleteConfigMapKey removes a single data key (merge patch data.<key>=null),
+	// leaving other keys intact. No error if the key is already absent.
+	DeleteConfigMapKey(ctx context.Context, name, key string) error
+}
+
 // Starter is an optional interface for accessors that run background machinery
 // (e.g. informers) which must be started before serving.
 type Starter interface {

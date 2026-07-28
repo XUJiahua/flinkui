@@ -87,6 +87,12 @@ func main() {
 	if cfg.Auth.LDAP.Enabled {
 		log.Printf("LDAP authentication enabled (%s)", cfg.Auth.LDAP.URL)
 	}
+	if cfg.Replay.Enabled {
+		log.Printf("replay-from-timestamp enabled (out-of-band SQL/spec writes; gitopsManaged=%v)", cfg.Replay.GitOpsManaged)
+		if _, ok := acc.(cluster.ConfigMapAccessor); !ok {
+			log.Printf("WARNING: replay enabled but accessor does not support ConfigMap read/write; SQL edits will fail")
+		}
+	}
 
 	// Decentralized HA (failover-decentralized). Enabled when HA groups are
 	// declared; needs the shared S3 for the fencing token + handoff record.
