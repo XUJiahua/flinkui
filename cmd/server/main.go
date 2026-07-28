@@ -77,9 +77,15 @@ func main() {
 		log.Printf("warning: S3 not configured; rollback recovery-point listing disabled")
 	}
 
-	a := auth.New(cfg.Auth)
-	if cfg.Auth.Password == "" {
-		log.Printf("WARNING: auth password is empty; set FKO_AUTH_PASSWORD to secure the platform")
+	a, err := auth.New(cfg.Auth)
+	if err != nil {
+		log.Fatalf("init auth: %v", err)
+	}
+	if cfg.Auth.Password == "" && !cfg.Auth.LDAP.Enabled {
+		log.Printf("WARNING: auth password is empty and LDAP is disabled; set FKO_AUTH_PASSWORD or enable FKO_AUTH_LDAP_ENABLED to secure the platform")
+	}
+	if cfg.Auth.LDAP.Enabled {
+		log.Printf("LDAP authentication enabled (%s)", cfg.Auth.LDAP.URL)
 	}
 
 	// Decentralized HA (failover-decentralized). Enabled when HA groups are

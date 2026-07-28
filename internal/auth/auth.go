@@ -30,15 +30,37 @@ type Auth struct {
 	password     string
 	secret       []byte
 	cookieSecure bool
+	// ldap is an optional directory authenticator; nil when LDAP is disabled.
+	ldap Authenticator
 }
 
-// New builds an Auth from config.
-func New(cfg config.AuthConfig) *Auth {
+// New builds an Auth from config. When LDAP is enabled but misconfigured it
+// returns an error so startup fails loudly rather than silently ignoring it.
+func New(cfg config.AuthConfig) (*Auth, error) {
+	a := &Auth{
+		username:     cfg.Username,
+		password:     cfg.Password,
+		secret:       []byte(cfg.SessionSecret),
+		cookieSecure: cfg.CookieSecure,
+	}
+	if cfg.LDAP.Enabled {
+		l, err := newLDAPAuthenticator(cfg.LDAP)
+		if err != nil {
+			return nil, err
+		}
+		a.ldap = l
+	}
+	return a, nil
+}
+
+// newWithAuthenticator is a test helper that injects a custom Authenticator.
+func newWithAuthenticator(cfg config.AuthConfig, ldap Authenticator) *Auth {
 	return &Auth{
 		username:     cfg.Username,
 		password:     cfg.Password,
 		secret:       []byte(cfg.SessionSecret),
 		cookieSecure: cfg.CookieSecure,
+		ldap:         ldap,
 	}
 }
 
@@ -83,9 +105,7 @@ func (a *Auth) Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-	userOK := subtle.ConstantTimeCompare([]byte(req.Username), []byte(a.username)) == 1
-	passOK := subtle.ConstantTimeCompare([]byte(req.Password), []byte(a.password)) == 1
-	if !userOK || !passOK {
+	if !a.authenticate(req.Username, req.Password) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
@@ -97,6 +117,26 @@ func (a *Auth) Login(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(cookieName, token, int(sessionMaxAge.Seconds()), "/", "", a.cookieSecure, true)
 	c.JSON(http.StatusOK, gin.H{"username": req.Username})
+}
+
+// authenticate accepts a login when it matches the local hard-coded credential
+// OR, if LDAP is enabled, authenticates against the directory. The local account
+// is checked first so it keeps working as a break-glass admin even when LDAP is
+// unreachable. The local match requires a non-empty configured password.
+func (a *Auth) authenticate(username, password string) bool {
+	if a.password != "" {
+		userOK := subtle.ConstantTimeCompare([]byte(username), []byte(a.username)) == 1
+		passOK := subtle.ConstantTimeCompare([]byte(password), []byte(a.password)) == 1
+		if userOK && passOK {
+			return true
+		}
+	}
+	if a.ldap != nil {
+		if err := a.ldap.Authenticate(username, password); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // Logout clears the session cookie.

@@ -85,6 +85,41 @@ spec:
                 secretKeyRef:
                   name: {{ include "flinkui.authSecretName" . }}
                   key: session-secret
+            {{- if .Values.auth.ldap.enabled }}
+            # LDAP / Active Directory authentication.
+            - name: FKO_AUTH_LDAP_ENABLED
+              value: "true"
+            - name: FKO_AUTH_LDAP_URL
+              value: {{ .Values.auth.ldap.url | quote }}
+            - name: FKO_AUTH_LDAP_START_TLS
+              value: {{ .Values.auth.ldap.startTls | quote }}
+            - name: FKO_AUTH_LDAP_INSECURE_SKIP_VERIFY
+              value: {{ .Values.auth.ldap.insecureSkipVerify | quote }}
+            {{- with .Values.auth.ldap.userDnTemplate }}
+            - name: FKO_AUTH_LDAP_USER_DN_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.auth.ldap.bindDn }}
+            - name: FKO_AUTH_LDAP_BIND_DN
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FKO_AUTH_LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flinkui.authSecretName" . }}
+                  key: ldap-bind-password
+                  optional: true
+            {{- with .Values.auth.ldap.baseDn }}
+            - name: FKO_AUTH_LDAP_BASE_DN
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.auth.ldap.userFilter }}
+            - name: FKO_AUTH_LDAP_USER_FILTER
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FKO_AUTH_LDAP_TIMEOUT_SEC
+              value: {{ .Values.auth.ldap.timeoutSec | default 10 | quote }}
+            {{- end }}
             {{- if .Values.s3.enabled }}
             # S3 / MinIO (rollback recovery-point selector).
             - name: FKO_CLUSTER_S3_ENDPOINT
