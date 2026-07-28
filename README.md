@@ -128,9 +128,29 @@ can also be supplied with `-config path.yaml`.
 | `FKO_AUTH_PASSWORD` | _(empty)_ | login password — **set this** |
 | `FKO_AUTH_SESSION_SECRET` | `change-me-please` | cookie signing secret — **set this** |
 | `FKO_AUTH_COOKIE_SECURE` | `false` | set the `Secure` flag on the session cookie — **enable when served over TLS** |
+| `FKO_AUTH_LDAP_ENABLED` | `false` | enable LDAP/AD authentication as an alternative to the local credential |
+| `FKO_AUTH_LDAP_URL` | _(empty)_ | LDAP server URL, e.g. `ldap://host:389` or `ldaps://host:636` |
+| `FKO_AUTH_LDAP_START_TLS` | `false` | upgrade a plain `ldap://` connection to TLS via StartTLS |
+| `FKO_AUTH_LDAP_INSECURE_SKIP_VERIFY` | `false` | skip TLS cert verification (self-signed internal servers) |
+| `FKO_AUTH_LDAP_USER_DN_TEMPLATE` | _(empty)_ | direct-bind DN template; `%s` = login name (e.g. `uid=%s,ou=people,dc=example,dc=com`) |
+| `FKO_AUTH_LDAP_BIND_DN` / `_BIND_PASSWORD` | _(empty)_ | service account for search+bind (empty ⇒ anonymous search) |
+| `FKO_AUTH_LDAP_BASE_DN` | _(empty)_ | search base for search+bind mode |
+| `FKO_AUTH_LDAP_USER_FILTER` | _(empty)_ | search filter; `%s` = login name (e.g. `(uid=%s)` or `(sAMAccountName=%s)`) |
+| `FKO_AUTH_LDAP_TIMEOUT_SEC` | `10` | dial/search timeout |
 
 > Security: this service can mutate cluster workloads, so it must not be exposed
 > unauthenticated. Always set `FKO_AUTH_PASSWORD` and a strong
+> **LDAP (optional).** Set `FKO_AUTH_LDAP_ENABLED=true` to authenticate against
+> an LDAP/Active Directory server as an alternative to the hard-coded
+> `FKO_AUTH_USERNAME`/`FKO_AUTH_PASSWORD`. A login succeeds if it matches the
+> local credential **or** binds successfully against LDAP, so the local account
+> remains a break-glass admin (you may leave `FKO_AUTH_PASSWORD` empty to make
+> LDAP the only interactive login; `FKO_AUTH_SESSION_SECRET` is still required).
+> Two bind modes are supported: **direct bind** (`FKO_AUTH_LDAP_USER_DN_TEMPLATE`)
+> or **search + bind** (`FKO_AUTH_LDAP_BASE_DN` + `FKO_AUTH_LDAP_USER_FILTER`,
+> optionally with a `FKO_AUTH_LDAP_BIND_DN` service account). Empty passwords are
+> always rejected to avoid LDAP unauthenticated-bind pitfalls.
+>
 > `FKO_AUTH_SESSION_SECRET` (design §6). When served over HTTPS (e.g. behind a
 > TLS-terminating ingress) set `FKO_AUTH_COOKIE_SECURE=true` so the session
 > cookie is never sent over plain HTTP. The status WebSocket rejects cross-origin

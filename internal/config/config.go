@@ -82,6 +82,48 @@ type AuthConfig struct {
 	// (e.g. behind an ingress terminating TLS). Default false to keep plain-HTTP
 	// local/dev usable.
 	CookieSecure bool `mapstructure:"cookie_secure"`
+	// LDAP optionally enables directory authentication as an alternative to the
+	// single hard-coded Username/Password. When enabled, a login is accepted if
+	// it matches the local credential OR authenticates against LDAP, so the
+	// local account stays usable as a break-glass admin.
+	LDAP LDAPConfig `mapstructure:"ldap"`
+}
+
+// LDAPConfig configures optional LDAP/Active Directory authentication. Two bind
+// modes are supported:
+//
+//   - Direct bind: set UserDNTemplate (e.g. "uid=%s,ou=people,dc=example,dc=com").
+//     The %s is replaced with the (DN-escaped) login name and bound directly.
+//   - Search + bind: leave UserDNTemplate empty and set BaseDN + UserFilter
+//     (e.g. "(uid=%s)" or "(sAMAccountName=%s)"). The console first binds with
+//     BindDN/BindPassword (anonymous if BindDN is empty), searches for the user,
+//     then re-binds as the found DN to verify the password.
+type LDAPConfig struct {
+	// Enabled turns LDAP authentication on.
+	Enabled bool `mapstructure:"enabled"`
+	// URL is the server URL, e.g. "ldap://ldap.example.com:389" or
+	// "ldaps://ldap.example.com:636".
+	URL string `mapstructure:"url"`
+	// StartTLS upgrades a plain ldap:// connection to TLS after connecting.
+	// Ignored for ldaps:// (already TLS).
+	StartTLS bool `mapstructure:"start_tls"`
+	// InsecureSkipVerify disables TLS certificate verification (ldaps/StartTLS),
+	// for internal servers with a self-signed certificate.
+	InsecureSkipVerify bool `mapstructure:"insecure_skip_verify"`
+	// UserDNTemplate enables direct-bind mode. "%s" is replaced with the
+	// DN-escaped login name.
+	UserDNTemplate string `mapstructure:"user_dn_template"`
+	// BindDN / BindPassword are the service-account credentials used to search
+	// for the user in search+bind mode (empty BindDN => anonymous search).
+	BindDN       string `mapstructure:"bind_dn"`
+	BindPassword string `mapstructure:"bind_password"`
+	// BaseDN is the search base for search+bind mode.
+	BaseDN string `mapstructure:"base_dn"`
+	// UserFilter is the search filter for search+bind mode; "%s" is replaced with
+	// the filter-escaped login name (e.g. "(uid=%s)").
+	UserFilter string `mapstructure:"user_filter"`
+	// TimeoutSec bounds the dial/search; defaults to 10s when zero.
+	TimeoutSec int `mapstructure:"timeout_sec"`
 }
 
 // LocalHAGroup declares one decentralized HA group from THIS instance's point of
@@ -217,6 +259,8 @@ func Load(configFile string) (*Config, error) {
 	v.SetDefault("cluster.s3.path_style", true)
 	v.SetDefault("auth.username", "admin")
 	v.SetDefault("auth.session_secret", "change-me-please")
+	v.SetDefault("auth.ldap.enabled", false)
+	v.SetDefault("auth.ldap.timeout_sec", 10)
 	v.SetDefault("secret_sync.enabled", false)
 	v.SetDefault("secret_sync.interval_sec", 300)
 	v.SetDefault("secret_sync.auto_restart", false)
@@ -241,6 +285,10 @@ func Load(configFile string) (*Config, error) {
 		"cluster.s3.secret_key", "cluster.s3.region", "cluster.s3.path_style",
 		"cluster.s3.insecure", "cluster.s3.prefix",
 		"auth.username", "auth.password", "auth.session_secret", "auth.cookie_secure",
+		"auth.ldap.enabled", "auth.ldap.url", "auth.ldap.start_tls",
+		"auth.ldap.insecure_skip_verify", "auth.ldap.user_dn_template",
+		"auth.ldap.bind_dn", "auth.ldap.bind_password", "auth.ldap.base_dn",
+		"auth.ldap.user_filter", "auth.ldap.timeout_sec",
 		"ha.self_cluster_id", "ha.default_peer_cluster_id", "ha.auto_all",
 		"secret_sync.enabled", "secret_sync.interval_sec", "secret_sync.auto_restart",
 		"secret_sync.openbao.addr", "secret_sync.openbao.namespace", "secret_sync.openbao.kv_mount",

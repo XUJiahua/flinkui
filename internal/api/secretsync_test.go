@@ -26,7 +26,10 @@ func testServerWithSync(t *testing.T, ss *secretsync.Syncer) http.Handler {
 		Cluster:          config.ClusterConfig{Name: "test", Namespace: "flink-operator"},
 	}
 	svc := flink.NewService(fakeAccessor{}, cfg)
-	a := auth.New(cfg.Auth)
+	a, err := auth.New(cfg.Auth)
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
 	staticFS := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>console</html>")}}
 	return New(cfg, svc, nil, nil, ss, a, staticFS).Handler()
 }

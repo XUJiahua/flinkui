@@ -38,8 +38,36 @@ auth:
   # Cookie signing secret. Strongly recommended to override (e.g. openssl rand -hex 16).
   sessionSecret: ""
   # Use an existing Secret instead of creating one. It must contain keys:
-  #   username, password, session-secret
+  #   username, password, session-secret (and ldap-bind-password if LDAP search
+  #   bind is used).
   existingSecret: ""
+  # -- Optional LDAP / Active Directory authentication. -----------------------
+  # When enabled, a login is accepted if it matches the local username/password
+  # above OR authenticates against LDAP, so the local account stays usable as a
+  # break-glass admin. With LDAP enabled you may leave auth.password empty to
+  # make LDAP the only interactive login (sessionSecret is still required).
+  ldap:
+    enabled: false
+    # Server URL: ldap://host:389 or ldaps://host:636.
+    url: ""
+    # Upgrade a plain ldap:// connection to TLS via StartTLS (ignored for ldaps://).
+    startTls: false
+    # Skip TLS cert verification (self-signed internal servers).
+    insecureSkipVerify: false
+    # Direct-bind mode: bind this DN template directly ("%s" = login name).
+    #   e.g. "uid=%s,ou=people,dc=example,dc=com"
+    userDnTemplate: ""
+    # Search+bind mode (used when userDnTemplate is empty): bind as bindDn to
+    # search baseDn with userFilter, then re-bind as the found user.
+    bindDn: ""
+    # Service-account password for the search bind. Stored in the auth Secret
+    # (key: ldap-bind-password). Leave empty for anonymous search.
+    bindPassword: ""
+    baseDn: ""
+    # "%s" is replaced with the (escaped) login name, e.g. "(uid=%s)" or
+    # "(sAMAccountName=%s)" for Active Directory.
+    userFilter: ""
+    timeoutSec: 10
 
 # -- S3 / MinIO for the rollback recovery-point selector (optional). --------
 s3:
