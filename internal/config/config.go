@@ -205,6 +205,26 @@ type SecretSyncConfig struct {
 	Items       []SecretSyncItem `mapstructure:"items"`
 }
 
+// ReplayConfig gates the "replay from timestamp" feature (internal/flink replay
+// orchestration). It performs OUT-OF-BAND writes to the SQL ConfigMap and the
+// FlinkDeployment spec, so it is disabled by default and must be explicitly
+// enabled. See docs/replay-from-timestamp-design.md.
+type ReplayConfig struct {
+	// Enabled turns the replay API on. Default false (writes job logic).
+	Enabled bool `mapstructure:"enabled"`
+	// GitOpsManaged marks the target environment as continuously reconciled by a
+	// GitOps controller (Argo/Flux). When true the API still works but flags the
+	// drift risk and requires an explicit confirmDrift on mutating calls, since a
+	// live ConfigMap edit would be reverted by the next sync.
+	GitOpsManaged bool `mapstructure:"gitops_managed"`
+	// SQLVolumeName is the podTemplate volume that mounts the SQL ConfigMap; the
+	// ConfigMap name is read from this volume on the CR (naming-convention
+	// independent). Matches the base template's "sql-scripts" volume.
+	SQLVolumeName string `mapstructure:"sql_volume_name"`
+	// SQLFileKey is the ConfigMap data key holding the job SQL (e.g. "job.sql").
+	SQLFileKey string `mapstructure:"sql_file_key"`
+}
+
 // Config is the top-level platform configuration.
 type Config struct {
 	// Addr is the HTTP listen address, e.g. ":8080".
@@ -239,6 +259,10 @@ type Config struct {
 	// Disabled by default; enable to have the console keep flink-s3-credentials /
 	// flink-job-env in sync and (optionally) restart jobs on change.
 	SecretSync SecretSyncConfig `mapstructure:"secret_sync"`
+
+	// Replay gates the "replay from timestamp" feature (out-of-band SQL + spec
+	// writes). Disabled by default; see docs/replay-from-timestamp-design.md.
+	Replay ReplayConfig `mapstructure:"replay"`
 }
 
 // Load reads configuration from env vars (prefix FKO_) and an optional file.
@@ -267,6 +291,10 @@ func Load(configFile string) (*Config, error) {
 	v.SetDefault("secret_sync.openbao.kv_mount", "kv")
 	v.SetDefault("secret_sync.openbao.auth_mount", "kubernetes")
 	v.SetDefault("secret_sync.openbao.role", "vault-app-role")
+	v.SetDefault("replay.enabled", false)
+	v.SetDefault("replay.gitops_managed", false)
+	v.SetDefault("replay.sql_volume_name", "sql-scripts")
+	v.SetDefault("replay.sql_file_key", "job.sql")
 
 	// Env binding: FKO_ prefix, nested keys via underscore.
 	v.SetEnvPrefix("FKO")
@@ -294,6 +322,7 @@ func Load(configFile string) (*Config, error) {
 		"secret_sync.openbao.addr", "secret_sync.openbao.namespace", "secret_sync.openbao.kv_mount",
 		"secret_sync.openbao.auth_mount", "secret_sync.openbao.role", "secret_sync.openbao.token",
 		"secret_sync.openbao.cacert",
+		"replay.enabled", "replay.gitops_managed", "replay.sql_volume_name", "replay.sql_file_key",
 	} {
 		_ = v.BindEnv(key)
 	}

@@ -115,6 +115,10 @@ can also be supplied with `-config path.yaml`.
 | `FKO_LOG_TAIL_LINES` | `200` | default log tail size |
 | `FKO_STATUS_POLL_SEC` | `5` | WebSocket status push interval |
 | `FKO_ALLOWED_ORIGINS` | _(empty)_ | comma-separated extra browser origins allowed to open the status WebSocket (same-origin is always allowed) |
+| `FKO_REPLAY_ENABLED` | `false` | enable the replay-from-timestamp feature (out-of-band SQL/spec writes; see [design](docs/replay-from-timestamp-design.md)) |
+| `FKO_REPLAY_GITOPS_MANAGED` | `false` | mark the target as continuously reconciled by GitOps (Argo/Flux); mutating replay calls then require `confirmDrift` |
+| `FKO_REPLAY_SQL_VOLUME_NAME` | `sql-scripts` | podTemplate volume that mounts the SQL ConfigMap (the ConfigMap name is read from the CR) |
+| `FKO_REPLAY_SQL_FILE_KEY` | `job.sql` | ConfigMap data key holding the job SQL |
 | `FKO_CLUSTER_NAME` | `default` | cluster identifier (display) |
 | `FKO_CLUSTER_NAMESPACE` | `flink-operator` | namespace holding FlinkDeployments |
 | `FKO_CLUSTER_KUBECONFIG` | _(empty)_ | kubeconfig path; empty ⇒ in-cluster |

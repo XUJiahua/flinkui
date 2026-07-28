@@ -147,6 +147,17 @@ spec:
                   name: {{ include "flinkui.s3SecretName" . }}
                   key: secret-key
             {{- end }}
+            {{- if .Values.replay.enabled }}
+            # Replay from timestamp (out-of-band SQL/spec writes).
+            - name: FKO_REPLAY_ENABLED
+              value: "true"
+            - name: FKO_REPLAY_GITOPS_MANAGED
+              value: {{ .Values.replay.gitopsManaged | quote }}
+            - name: FKO_REPLAY_SQL_VOLUME_NAME
+              value: {{ .Values.replay.sqlVolumeName | quote }}
+            - name: FKO_REPLAY_SQL_FILE_KEY
+              value: {{ .Values.replay.sqlFileKey | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

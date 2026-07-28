@@ -3,6 +3,7 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -189,6 +190,46 @@ func (k *KubeAccessor) ApplySecret(ctx context.Context, name string, data map[st
 	}
 	existing.Data = data
 	_, err = secrets.Update(ctx, existing, metav1.UpdateOptions{})
+	return err
+}
+
+// GetConfigMap returns the ConfigMap's data. Implements cluster.ConfigMapAccessor.
+func (k *KubeAccessor) GetConfigMap(ctx context.Context, name string) (map[string]string, bool, error) {
+	cm, err := k.clientset.CoreV1().ConfigMaps(k.namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return cm.Data, true, nil
+}
+
+// PatchConfigMapKey creates-or-updates a single data key without touching other
+// keys. Implements cluster.ConfigMapAccessor. It uses a JSON merge patch on
+// data.<key>, so co-resident files in the same ConfigMap are preserved.
+func (k *KubeAccessor) PatchConfigMapKey(ctx context.Context, name, key, value string) error {
+	patch, err := json.Marshal(map[string]any{
+		"data": map[string]string{key: value},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = k.clientset.CoreV1().ConfigMaps(k.namespace).Patch(
+		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
+	return err
+}
+
+// DeleteConfigMapKey removes a single data key. Implements
+// cluster.ConfigMapAccessor. A JSON merge patch with a null value deletes the
+// key; if the ConfigMap or key is already gone the patch is a no-op.
+func (k *KubeAccessor) DeleteConfigMapKey(ctx context.Context, name, key string) error {
+	patch := []byte(fmt.Sprintf(`{"data":{%q:null}}`, key))
+	_, err := k.clientset.CoreV1().ConfigMaps(k.namespace).Patch(
+		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
 	return err
 }
 

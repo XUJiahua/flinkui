@@ -13,8 +13,10 @@ import (
 type OperationType string
 
 const (
-	OpSavepoint OperationType = "savepoint"
-	OpRestart   OperationType = "restart"
+	OpSavepoint    OperationType = "savepoint"
+	OpRestart      OperationType = "restart"
+	OpReplay       OperationType = "replay"
+	OpReplayRevert OperationType = "replay-revert"
 )
 
 // OperationStatus is the lifecycle state of an async operation.
