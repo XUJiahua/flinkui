@@ -1,4 +1,5 @@
-{{- if or .Values.ha.groups .Values.ha.autoAll }}
+{{- $needConfig := or .Values.ha.groups .Values.ha.autoAll .Values.secretSync.enabled -}}
+{{- if $needConfig }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,8 +9,9 @@ metadata:
     {{- include "flinkui.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    # Rendered by the Helm chart. Only ha.* is provided here; addr/auth/cluster/s3
-    # come from FKO_* env vars, which override config-file values.
+    # Rendered by the Helm chart. Only ha.* / secret_sync.* are provided here;
+    # addr/auth/cluster/s3 come from FKO_* env vars, which override config-file values.
+    {{- if or .Values.ha.groups .Values.ha.autoAll }}
     ha:
       {{- with .Values.ha.selfClusterId }}
       self_cluster_id: {{ . | quote }}
@@ -43,4 +45,37 @@ data:
           handoff_key: {{ . | quote }}
           {{- end }}
         {{- end }}
+    {{- end }}
+    {{- if .Values.secretSync.enabled }}
+    # OpenBao/Vault -> K8s Secret sync. items (KV path -> Secret) can only be
+    # expressed in the config file, not via FKO_* env vars.
+    secret_sync:
+      enabled: true
+      interval_sec: {{ .Values.secretSync.intervalSec | default 300 }}
+      auto_restart: {{ .Values.secretSync.autoRestart | default false }}
+      openbao:
+        {{- with .Values.secretSync.openbao.addr }}
+        addr: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.secretSync.openbao.namespace }}
+        namespace: {{ . | quote }}
+        {{- end }}
+        kv_mount: {{ .Values.secretSync.openbao.kvMount | default "kv" | quote }}
+        auth_mount: {{ .Values.secretSync.openbao.authMount | default "kubernetes" | quote }}
+        role: {{ .Values.secretSync.openbao.role | default "vault-app-role" | quote }}
+        {{- with .Values.secretSync.openbao.token }}
+        token: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.secretSync.openbao.cacert }}
+        cacert: {{ . | quote }}
+        {{- end }}
+      items:
+        {{- range .Values.secretSync.items }}
+        - secret_name: {{ .secretName | quote }}
+          kv_path: {{ .kvPath | quote }}
+          {{- with .restartDeployment }}
+          restart_deployment: {{ . | quote }}
+          {{- end }}
+        {{- end }}
+    {{- end }}
 {{- end }}

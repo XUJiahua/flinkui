@@ -141,7 +141,40 @@ can also be supplied with `-config path.yaml`.
 | `FKO_AUTH_LDAP_BASE_DN` | _(empty)_ | search base for search+bind mode |
 | `FKO_AUTH_LDAP_USER_FILTER` | _(empty)_ | search filter; `%s` = login name (e.g. `(uid=%s)` or `(sAMAccountName=%s)`) |
 | `FKO_AUTH_LDAP_TIMEOUT_SEC` | `10` | dial/search timeout |
+| `FKO_SECRET_SYNC_ENABLED` | `false` | enable the in-process OpenBao/Vault → K8s Secret sync loop |
+| `FKO_SECRET_SYNC_INTERVAL_SEC` | `300` | sync loop interval |
+| `FKO_SECRET_SYNC_AUTO_RESTART` | `false` | bump `restartNonce` on an item's `restart_deployment` when its value changed |
+| `FKO_SECRET_SYNC_OPENBAO_ADDR` | _(empty)_ | OpenBao/Vault address, e.g. `http://vault.vault.svc.cluster.local:8200` |
+| `FKO_SECRET_SYNC_OPENBAO_NAMESPACE` | _(empty)_ | Vault Enterprise namespace (leave empty for OpenBao OSS) |
+| `FKO_SECRET_SYNC_OPENBAO_KV_MOUNT` | `kv` | KV v2 mount; values are read from `<mount>/data/<kv_path>` |
+| `FKO_SECRET_SYNC_OPENBAO_AUTH_MOUNT` | `kubernetes` | Kubernetes auth mount |
+| `FKO_SECRET_SYNC_OPENBAO_ROLE` | `vault-app-role` | Kubernetes auth role bound to this pod's ServiceAccount |
+| `FKO_SECRET_SYNC_OPENBAO_TOKEN` | _(empty)_ | static token (debug); empty ⇒ Kubernetes auth with the SA token |
+| `FKO_SECRET_SYNC_OPENBAO_CACERT` | _(empty)_ | CA file for https (mount it yourself) |
 
+> **Secret sync (optional).** `secret_sync.items` — the KV path → Secret mapping —
+> is a list of objects and therefore **cannot be expressed with `FKO_*` env vars**;
+> it must come from the `-config` file (the Helm chart renders it, see
+> `secretSync.items` in `values.yaml`). Without `items` the loop starts but
+> synchronises nothing. Each item takes `secret_name`, `kv_path` and an optional
+> `restart_deployment` (used only when `auto_restart` is on):
+>
+> ```yaml
+> secret_sync:
+>   enabled: true
+>   interval_sec: 300
+>   auto_restart: false
+>   openbao:
+>     addr: "http://vault.vault.svc.cluster.local:8200"
+>     kv_mount: "kv"
+>     auth_mount: "kubernetes"
+>     role: "flinkui-role"
+>   items:
+>     - secret_name: flink-job-env
+>       kv_path: config/cil/flink/demo/job-env
+>       restart_deployment: flink-sql-job-demo
+> ```
+>
 > Security: this service can mutate cluster workloads, so it must not be exposed
 > unauthenticated. Always set `FKO_AUTH_PASSWORD` and a strong
 > **LDAP (optional).** Set `FKO_AUTH_LDAP_ENABLED=true` to authenticate against

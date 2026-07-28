@@ -136,6 +136,8 @@ rbac:
 service:
   type: ClusterIP
   port: 80
+  # Fixed node port when type is NodePort (30000-32767); empty => auto-assigned.
+  nodePort: ""
 
 ingress:
   enabled: false
@@ -198,6 +200,31 @@ affinity: {}
 # App-level config is via FKO_SECRET_SYNC_* env / config file (see README).
 secretSync:
   enabled: false
+  # Sync loop interval.
+  intervalSec: 300
+  # Bump restartNonce on the item's restart_deployment when the value changed.
+  autoRestart: false
+  openbao:
+    # OpenBao/Vault address, e.g. http://vault.vault.svc.cluster.local:8200
+    addr: ""
+    # Vault Enterprise namespace (leave empty for OpenBao OSS).
+    namespace: ""
+    # KV v2 mount; secrets are read from <mount>/data/<kvPath>.
+    kvMount: "kv"
+    # Kubernetes auth mount.
+    authMount: "kubernetes"
+    # Kubernetes auth role bound to this pod's ServiceAccount.
+    role: "vault-app-role"
+    # Static token (debug only); empty => Kubernetes auth with the SA token.
+    token: ""
+    # CA file path for https (must be mounted separately).
+    cacert: ""
+  # KV path -> Secret mapping. Only expressible via the config file, so the
+  # chart renders it into the mounted config.yaml.
+  items: []
+  #  - secretName: flink-job-env
+  #    kvPath: config/cil/flink/demo/job-env
+  #    restartDeployment: flink-sql-job-demo   # optional, needs autoRestart
 
 # Replay from timestamp (out-of-band SQL ConfigMap + FlinkDeployment spec edits).
 # OFF by default: it rewrites the job's Kafka source SQL and forces a stateless

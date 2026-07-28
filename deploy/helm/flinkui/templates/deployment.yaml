@@ -15,7 +15,7 @@ spec:
       annotations:
         # Roll pods when the auth/S3 secrets change.
         checksum/config: {{ include (print $.Template.BasePath "/secret-auth.yaml") . | sha256sum }}
-        {{- if or .Values.ha.groups .Values.ha.autoAll }}
+        {{- if or .Values.ha.groups .Values.ha.autoAll .Values.secretSync.enabled }}
         checksum/ha: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
@@ -40,7 +40,7 @@ spec:
         - name: flinkui
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- if or .Values.ha.groups .Values.ha.autoAll }}
+          {{- if or .Values.ha.groups .Values.ha.autoAll .Values.secretSync.enabled }}
           args: ["-config", "/etc/flinkui/config.yaml"]
           {{- end }}
           {{- with .Values.securityContext }}
@@ -161,7 +161,7 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or .Values.ha.groups .Values.ha.autoAll }}
+          {{- if or .Values.ha.groups .Values.ha.autoAll .Values.secretSync.enabled }}
           volumeMounts:
             - name: config
               mountPath: /etc/flinkui
@@ -179,7 +179,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- if or .Values.ha.groups .Values.ha.autoAll }}
+      {{- if or .Values.ha.groups .Values.ha.autoAll .Values.secretSync.enabled }}
       volumes:
         - name: config
           configMap:
