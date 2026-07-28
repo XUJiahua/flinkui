@@ -152,10 +152,12 @@ func (h *Handlers) getMetrics(c *gin.Context) {
 // clusterInfo handles GET /api/cluster.
 func (h *Handlers) clusterInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"name":             h.cfg.Cluster.Name,
-		"namespace":        h.cfg.Cluster.Namespace,
-		"s3Configured":     h.store != nil,
-		"clusterReachable": h.svc.Reachable(c.Request.Context()),
+		"name":                h.cfg.Cluster.Name,
+		"namespace":           h.cfg.Cluster.Namespace,
+		"s3Configured":        h.store != nil,
+		"clusterReachable":    h.svc.Reachable(c.Request.Context()),
+		"replayEnabled":       h.cfg.Replay.Enabled,
+		"replayGitopsManaged": h.cfg.Replay.GitOpsManaged,
 	})
 }
 

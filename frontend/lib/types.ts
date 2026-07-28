@@ -64,6 +64,36 @@ export interface ClusterInfo {
   namespace: string;
   s3Configured: boolean;
   clusterReachable: boolean;
+  replayEnabled: boolean;
+  replayGitopsManaged: boolean;
+}
+
+// Replay from timestamp (internal/flink replay).
+export interface JobSQL {
+  configMap: string;
+  fileKey: string;
+  sql: string;
+  kafkaSources: string[] | null;
+}
+
+export interface ReplayPlan {
+  table: string;
+  fromMillis: number;
+  upgradeMode: string;
+  originalSql: string;
+  newSql: string;
+}
+
+export interface ReplaySession {
+  active: boolean;
+  fromMillis?: number;
+  startedAt?: string;
+  startedBy?: string;
+  sourceTable?: string;
+  prevUpgradeMode?: string;
+  upgradeMode?: string;
+  verdict?: string;
+  verdictDetail?: string;
 }
 
 export interface SavepointResult {

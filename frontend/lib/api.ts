@@ -7,6 +7,9 @@ import type {
   JobDetail,
   JobMetrics,
   JobSummary,
+  JobSQL,
+  ReplayPlan,
+  ReplaySession,
   LocalView,
   LogComponent,
   Operation,
@@ -115,6 +118,35 @@ export const api = {
       body: JSON.stringify({ confirm: true, force, ackDataLoss }),
     }),
   getHATask: (id: string) => request<HATask>(`/api/ha-tasks/${encodeURIComponent(id)}`),
+
+  // Replay from timestamp (out-of-band SQL + upgradeMode; opt-in feature).
+  getSQL: (name: string) => request<JobSQL>(`/api/jobs/${encodeURIComponent(name)}/sql`),
+  replaySession: (name: string) =>
+    request<ReplaySession>(`/api/jobs/${encodeURIComponent(name)}/replay`),
+  replayPreview: (
+    name: string,
+    body: { hoursAgo?: number; fromMillis?: number; sourceTable?: string; autoOffsetReset?: string },
+  ) =>
+    request<ReplayPlan>(`/api/jobs/${encodeURIComponent(name)}/replay/preview`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  startReplay: (
+    name: string,
+    body: {
+      hoursAgo?: number;
+      fromMillis?: number;
+      sourceTable?: string;
+      autoOffsetReset?: string;
+      confirmDrift?: boolean;
+    },
+  ) =>
+    request<Operation>(`/api/jobs/${encodeURIComponent(name)}/replay`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revertReplay: (name: string) =>
+    request<Operation>(`/api/jobs/${encodeURIComponent(name)}/replay/revert`, { method: "POST" }),
 
   // OpenBao/Vault secret-sync (no ESO).
   secretSyncStatus: () => request<SecretSyncStatus>("/api/secretsync"),
