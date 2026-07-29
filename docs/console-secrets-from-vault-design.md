@@ -23,7 +23,8 @@
 **非目标**:
 - 不引入 External Secrets Operator / Vault Agent Injector / CSI 驱动(保持本项目「无 ESO、
   app 原生 Vault」的取向;它们作为运维替代方案在 §7 列出)。
-- v1 不做运行期热轮换(读一次,值变更需重启 Pod;见 §6)。
+- 运行期热轮换分阶段:P1-P3 先做启动期解析(读一次);P4 加**热更新循环**在不重启的
+  情况下就地刷新(见 §6)。
 - 不改变 secret-sync 的职责(同步「作业用」Secret);本特性是**控制台自身**配置的来源。
 
 ## 2. 为什么不能复用 secret-sync(鸡生蛋)
@@ -146,14 +147,32 @@ Load(config) → resolveVaultRefs(cfg) → auth.New(cfg.Auth) / store.New(cfg.Cl
 - 提供可选 `vault.optional: true`(或 per-ref)在解析失败时回退到字面量/env,用于
   「Vault 抖动时靠预置 env 兜底」的部署;默认 `false`(严格)。
 
-## 6. 轮换语义（重要）
+## 6. 运行期热轮换（Runtime rotation）
 
-- **read-once**:启动时读一次;Vault 里改了值需**重启 Pod** 才生效。v1 不做运行期刷新
-  (要做需区分「可安全热更新」与「需重启」的字段,复杂度高)。
-- **`sessionSecret` 特别注意**:它若在重启后从 Vault 取到**新值**,所有已签发的会话
-  cookie 立即失效,用户需重新登录。这是签名密钥的固有行为,文档需醒目提示;因此 Vault 里
-  的 `session-secret` 应稳定,不要随部署轮换。
-- `s3` / `ldap.bindPassword` 轮换:改 Vault → 重启 flinkui 即加载新值。
+目标:Vault 里改了值,**不重启 Pod** 也能生效。做法是一个**周期性热更新循环**(复用同一个
+Vault 客户端与连接;interval 同 `secret_sync` 风格,可配),定期重读所有 `_ref`,把新值放进
+进程内**可原子替换的持有者**;各组件在**使用时**读取当前值:
+
+| 字段 | 热更新方式 | 生效时机 |
+|------|-----------|---------|
+| `auth.password`(本地) | 登录比对时读持有者 | 立即(下次登录) |
+| `auth.ldap.bindPassword` | 每次登录 bind 时读持有者 | 立即(下次登录) |
+| `s3.accessKey/secretKey` | store 用可刷新 credentials provider,或原子替换 store 指针 | 立即(下次 S3 调用) |
+| `auth.sessionSecret` | 原子替换签名密钥(**单密钥,不做 keyring**) | 立即;**已签发的会话 cookie 失效,用户需重新登录** |
+
+关于 `sessionSecret`:它是低频轮换项,且强制重新登录的代价可接受,因此**不引入多密钥
+keyring 优雅轮换**——直接单密钥就地替换,轮换时在线会话失效。文档提示即可。
+
+分两级实现:
+- **read-once(P1-P3)**:启动时解析一次(§5);值变更需重启才生效。
+- **热更新(P4)**:上面的循环 + 原子持有者;`auth.Auth` / `store.Store` 增加
+  `UpdateSecrets(...)` 类接口,由循环在检测到值变化时调用。read-once 仍是回退路径。
+
+手动触发(WebUI/admin,均需已认证 + 审计):
+- **「Reload secrets from Vault」**:立即重读一次(不等 interval),就地热换所有字段;
+- **「Restart console」(可选逃生舱)**:受控 `exit(0)`,由 Deployment 重建 Pod 做全量干净
+  重载。作为兜底(如热更新路径出问题时),带二次确认;单副本会有数秒不可用,建议
+  `replicas≥2` + 滚动。**不是**日常轮换的主力——日常靠热更新循环无感完成。
 
 ## 7. 运维替代方案（不改代码,作对比)
 
@@ -192,10 +211,13 @@ Load(config) → resolveVaultRefs(cfg) → auth.New(cfg.Auth) / store.New(cfg.Cl
    `main.go` 接线;单测(httptest 假 Vault:解析成功、字段优先级、失败 fail-fast、optional 回退)。
 3. **P3**:Helm 渲染 `_ref` + policy 示例 + 文档(含 sessionSecret 轮换与启动依赖警告);
    一个字段(建议 `s3` 或 `ldap.bindPassword`)端到端验证后铺开到全部字段。
+4. **P4**:热更新循环 + 原子持有者 + `UpdateSecrets` 接口 + 手动「Reload from Vault」动作
+   (可选「Restart console」逃生舱)。sessionSecret 单密钥就地替换(不做 keyring)。
 
 ## 11. 风险与取舍
 
 - **启动期 Vault 强依赖**:默认 fail-fast → Vault 挂则 console 挂;用 `optional`+env 兜底缓解。
-- **read-once**:值轮换要重启;`sessionSecret` 轮换会踢登录。文档明确。
+- **热更新(P4)前 read-once**:P4 之前值轮换要重启;`sessionSecret` 轮换(无论热换还是
+  重启)都会使在线会话失效、需重新登录——已判定可接受,不做 keyring。
 - **契约漂移**:抽共享包后 secret-sync 与本特性共用一套,降低漂移;role/policy 需运维正确授权。
 - **范围克制**:不碰热轮换、不引入外部组件;三源并存不破坏现有部署。
