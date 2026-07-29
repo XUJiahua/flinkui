@@ -15,6 +15,7 @@ import (
 
 	"github.com/fko-demo/flinkui/internal/cluster"
 	"github.com/fko-demo/flinkui/internal/config"
+	"github.com/fko-demo/flinkui/internal/openbao"
 )
 
 // hashAnnotation records, on the FlinkDeployment, the value-hash last applied so
@@ -89,7 +90,7 @@ type Status struct {
 // Syncer runs the periodic OpenBao -> Secret sync (+ optional restart) loop.
 type Syncer struct {
 	acc Accessor
-	bao *baoClient
+	bao *openbao.Client
 	cfg config.SecretSyncConfig
 
 	runMu sync.Mutex // serializes syncOnce (ticker vs manual SyncNow)
@@ -110,7 +111,7 @@ func New(acc Accessor, cfg config.SecretSyncConfig) (*Syncer, error) {
 	if !cfg.Enabled || len(cfg.Items) == 0 {
 		return nil, nil
 	}
-	bao, err := newBaoClient(cfg.OpenBao)
+	bao, err := openbao.New(cfg.OpenBao)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +155,7 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 	defer s.setRunning(false)
 
 	statuses := make([]ItemStatus, 0, len(s.cfg.Items))
-	token, err := s.bao.login()
+	token, err := s.bao.Login()
 	if err != nil {
 		log.Printf("secretsync: openbao login failed: %v", err)
 		for _, item := range s.cfg.Items {
@@ -190,7 +191,7 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 		}
 		st.RestartDeployments = targets
 
-		data, err := s.bao.readKV(token, item.KVPath)
+		data, err := s.bao.ReadKV(token, item.KVPath)
 		if err != nil {
 			log.Printf("secretsync: read %s: %v", item.KVPath, err)
 			st.Error = "read: " + err.Error()

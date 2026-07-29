@@ -1,12 +1,8 @@
-// Package secretsync keeps Kubernetes Secrets in sync with OpenBao/Vault KV v2
-// WITHOUT the External Secrets Operator: an in-process loop reads KV over the
-// org contract (Kubernetes auth + KV v2) and writes the target Secrets via the
-// cluster accessor, optionally restarting FlinkDeployments on change.
-//
-// This is the flinkui-hosted equivalent of the standalone openbao-sync CronJob
-// (deploy/vault/openbao-sync.py): same OpenBao contract, but the logic lives in
-// the console binary and reuses its FlinkDeployment restart primitive.
-package secretsync
+// Package openbao is a minimal, dependency-free OpenBao/Vault client (stdlib
+// net/http only) implementing the org contract: Kubernetes auth + KV v2 read.
+// It is shared by the secret-sync loop (internal/secretsync) and the startup
+// resolution of the console's own secrets (config vault refs).
+package openbao
 
 import (
 	"bytes"
@@ -23,15 +19,18 @@ import (
 	"github.com/fko-demo/flinkui/internal/config"
 )
 
+// saTokenFile is the in-cluster ServiceAccount token path used for Kubernetes auth.
 const saTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
-// baoClient is a minimal OpenBao/Vault client (stdlib net/http only).
-type baoClient struct {
+// Client is a minimal OpenBao/Vault client (stdlib net/http only).
+type Client struct {
 	cfg  config.OpenBaoConfig
 	http *http.Client
 }
 
-func newBaoClient(cfg config.OpenBaoConfig) (*baoClient, error) {
+// New builds a Client from the OpenBao connection config. It configures TLS from
+// CACert when provided, or skips verification for a bare https POC endpoint.
+func New(cfg config.OpenBaoConfig) (*Client, error) {
 	if cfg.Addr == "" {
 		return nil, fmt.Errorf("openbao addr is empty")
 	}
@@ -50,32 +49,32 @@ func newBaoClient(cfg config.OpenBaoConfig) (*baoClient, error) {
 	case strings.HasPrefix(cfg.Addr, "https"):
 		// Self-signed POC endpoint without a provided CA. Skips verification;
 		// for production set OpenBao.CACert.
-		tlsCfg.InsecureSkipVerify = true
+		tlsCfg.InsecureSkipVerify = true //nolint:gosec // opt-in POC path
 	}
-	return &baoClient{
+	return &Client{
 		cfg:  cfg,
 		http: &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsCfg}},
 	}, nil
 }
 
-func (b *baoClient) do(method, path string, body any, token string) (map[string]any, error) {
+func (c *Client) do(method, path string, body any, token string) (map[string]any, error) {
 	var rd io.Reader
 	if body != nil {
 		raw, _ := json.Marshal(body)
 		rd = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, strings.TrimRight(b.cfg.Addr, "/")+path, rd)
+	req, err := http.NewRequest(method, strings.TrimRight(c.cfg.Addr, "/")+path, rd)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if b.cfg.Namespace != "" {
-		req.Header.Set("X-Vault-Namespace", b.cfg.Namespace)
+	if c.cfg.Namespace != "" {
+		req.Header.Set("X-Vault-Namespace", c.cfg.Namespace)
 	}
 	if token != "" {
 		req.Header.Set("X-Vault-Token", token)
 	}
-	resp, err := b.http.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -93,19 +92,19 @@ func (b *baoClient) do(method, path string, body any, token string) (map[string]
 	return out, nil
 }
 
-// login authenticates and returns a client token. Uses a static token when set;
+// Login authenticates and returns a client token. Uses a static token when set;
 // otherwise the pod ServiceAccount token via the Kubernetes auth method.
-func (b *baoClient) login() (string, error) {
-	if b.cfg.Token != "" {
-		return b.cfg.Token, nil
+func (c *Client) Login() (string, error) {
+	if c.cfg.Token != "" {
+		return c.cfg.Token, nil
 	}
 	jwt, err := os.ReadFile(saTokenFile)
 	if err != nil {
 		return "", fmt.Errorf("read SA token: %w", err)
 	}
-	mount := strDefault(b.cfg.AuthMount, "kubernetes")
-	resp, err := b.do(http.MethodPost, "/v1/auth/"+mount+"/login",
-		map[string]any{"role": b.cfg.Role, "jwt": string(jwt)}, "")
+	mount := strDefault(c.cfg.AuthMount, "kubernetes")
+	resp, err := c.do(http.MethodPost, "/v1/auth/"+mount+"/login",
+		map[string]any{"role": c.cfg.Role, "jwt": string(jwt)}, "")
 	if err != nil {
 		return "", err
 	}
@@ -117,10 +116,10 @@ func (b *baoClient) login() (string, error) {
 	return tok, nil
 }
 
-// readKV reads a KV v2 secret at <mount>/data/<path> and returns its data map.
-func (b *baoClient) readKV(token, path string) (map[string]string, error) {
-	mount := strDefault(b.cfg.KVMount, "kv")
-	resp, err := b.do(http.MethodGet, "/v1/"+mount+"/data/"+strings.Trim(path, "/"), nil, token)
+// ReadKV reads a KV v2 secret at <mount>/data/<path> and returns its data map.
+func (c *Client) ReadKV(token, path string) (map[string]string, error) {
+	mount := strDefault(c.cfg.KVMount, "kv")
+	resp, err := c.do(http.MethodGet, "/v1/"+mount+"/data/"+strings.Trim(path, "/"), nil, token)
 	if err != nil {
 		return nil, err
 	}
