@@ -15,6 +15,7 @@ import (
 	"github.com/fko-demo/flinkui/internal/config"
 	"github.com/fko-demo/flinkui/internal/failover"
 	"github.com/fko-demo/flinkui/internal/flink"
+	"github.com/fko-demo/flinkui/internal/openbao"
 	"github.com/fko-demo/flinkui/internal/secretsync"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/fko-demo/flinkui/web"
@@ -36,6 +37,17 @@ func main() {
 	cfg, err := config.Load(*configFile)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+
+	// Resolve the console's own sensitive fields from Vault when *_ref are set
+	// (literal/env values win; no-op when none set). See
+	// docs/console-secrets-from-vault-design.md.
+	if err := openbao.ResolveConfigRefs(cfg); err != nil {
+		if cfg.Vault.Optional {
+			log.Printf("WARNING: vault ref resolution failed (optional; using literal/env values): %v", err)
+		} else {
+			log.Fatalf("resolve vault secret refs: %v", err)
+		}
 	}
 
 	// Cluster accessor (in-cluster if kubeconfig empty; else kubeconfig).

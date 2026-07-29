@@ -1,4 +1,4 @@
-{{- $needConfig := or .Values.ha.groups .Values.ha.autoAll .Values.secretSync.enabled -}}
+{{- $needConfig := (include "flinkui.needConfig" .) -}}
 {{- if $needConfig }}
 apiVersion: v1
 kind: ConfigMap
@@ -85,5 +85,48 @@ data:
             {{- end }}
           {{- end }}
         {{- end }}
+    {{- end }}
+    {{- if .Values.vault.addr }}
+    # Vault connection for resolving the console's OWN secret refs at startup.
+    vault:
+      addr: {{ .Values.vault.addr | quote }}
+      {{- with .Values.vault.namespace }}
+      namespace: {{ . | quote }}
+      {{- end }}
+      kv_mount: {{ .Values.vault.kvMount | default "kv" | quote }}
+      auth_mount: {{ .Values.vault.authMount | default "kubernetes" | quote }}
+      role: {{ .Values.vault.role | default "vault-app-role" | quote }}
+      {{- with .Values.vault.token }}
+      token: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.vault.cacert }}
+      cacert: {{ . | quote }}
+      {{- end }}
+      {{- if .Values.vault.optional }}
+      optional: true
+      {{- end }}
+    {{- if or .Values.auth.passwordRef.path .Values.auth.sessionSecretRef.path .Values.auth.ldap.bindPasswordRef.path }}
+    auth:
+      {{- if .Values.auth.passwordRef.path }}
+      password_ref: { path: {{ .Values.auth.passwordRef.path | quote }}, key: {{ .Values.auth.passwordRef.key | quote }} }
+      {{- end }}
+      {{- if .Values.auth.sessionSecretRef.path }}
+      session_secret_ref: { path: {{ .Values.auth.sessionSecretRef.path | quote }}, key: {{ .Values.auth.sessionSecretRef.key | quote }} }
+      {{- end }}
+      {{- if .Values.auth.ldap.bindPasswordRef.path }}
+      ldap:
+        bind_password_ref: { path: {{ .Values.auth.ldap.bindPasswordRef.path | quote }}, key: {{ .Values.auth.ldap.bindPasswordRef.key | quote }} }
+      {{- end }}
+    {{- end }}
+    {{- if or .Values.s3.accessKeyRef.path .Values.s3.secretKeyRef.path }}
+    cluster:
+      s3:
+        {{- if .Values.s3.accessKeyRef.path }}
+        access_key_ref: { path: {{ .Values.s3.accessKeyRef.path | quote }}, key: {{ .Values.s3.accessKeyRef.key | quote }} }
+        {{- end }}
+        {{- if .Values.s3.secretKeyRef.path }}
+        secret_key_ref: { path: {{ .Values.s3.secretKeyRef.path | quote }}, key: {{ .Values.s3.secretKeyRef.key | quote }} }
+        {{- end }}
+    {{- end }}
     {{- end }}
 {{- end }}
