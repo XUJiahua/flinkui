@@ -45,6 +45,10 @@ type S3Config struct {
 	// that use a self-signed certificate. (TLS on/off is determined by the
 	// endpoint URL scheme; there is no separate use_ssl toggle.)
 	Insecure bool `mapstructure:"insecure"`
+	// Optional Vault refs for the S3 credentials (resolved at startup when the
+	// literal/env value is empty).
+	AccessKeyRef SecretRef `mapstructure:"access_key_ref"`
+	SecretKeyRef SecretRef `mapstructure:"secret_key_ref"`
 }
 
 // BucketPrefix normalizes Bucket (which may itself carry a "/path" suffix) and
@@ -87,6 +91,11 @@ type AuthConfig struct {
 	// it matches the local credential OR authenticates against LDAP, so the
 	// local account stays usable as a break-glass admin.
 	LDAP LDAPConfig `mapstructure:"ldap"`
+
+	// Optional Vault refs for the sensitive fields (resolved at startup when the
+	// literal/env value is empty). See docs/console-secrets-from-vault-design.md.
+	PasswordRef      SecretRef `mapstructure:"password_ref"`
+	SessionSecretRef SecretRef `mapstructure:"session_secret_ref"`
 }
 
 // LDAPConfig configures optional LDAP/Active Directory authentication. Two bind
@@ -124,6 +133,8 @@ type LDAPConfig struct {
 	UserFilter string `mapstructure:"user_filter"`
 	// TimeoutSec bounds the dial/search; defaults to 10s when zero.
 	TimeoutSec int `mapstructure:"timeout_sec"`
+	// BindPasswordRef optionally resolves BindPassword from Vault at startup.
+	BindPasswordRef SecretRef `mapstructure:"bind_password_ref"`
 }
 
 // LocalHAGroup declares one decentralized HA group from THIS instance's point of
@@ -261,6 +272,30 @@ type ReplayConfig struct {
 	SQLFileKey string `mapstructure:"sql_file_key"`
 }
 
+// SecretRef points at one field inside a Vault KV v2 secret. When set on a
+// sensitive config field (and the literal/env value is empty), the console
+// resolves it from Vault at startup. See docs/console-secrets-from-vault-design.md.
+type SecretRef struct {
+	// Path is the KV v2 path under the mount (e.g. config/cil/flink/console/s3).
+	Path string `mapstructure:"path"`
+	// Key is the field name within that secret (e.g. access-key).
+	Key string `mapstructure:"key"`
+}
+
+// IsSet reports whether the ref names a Vault location.
+func (r SecretRef) IsSet() bool { return r.Path != "" && r.Key != "" }
+
+// VaultConfig is the connection used to resolve the console's OWN secret refs at
+// startup (the same OpenBao/Vault contract as secret_sync.openbao). Disabled
+// unless at least one *_ref is set and Addr is provided.
+type VaultConfig struct {
+	OpenBaoConfig `mapstructure:",squash"`
+	// Optional, when true, makes ref resolution best-effort: on any Vault error
+	// the console falls back to whatever literal/env values are present instead
+	// of failing to start. Default false (fail-fast, secure).
+	Optional bool `mapstructure:"optional"`
+}
+
 // Config is the top-level platform configuration.
 type Config struct {
 	// Addr is the HTTP listen address, e.g. ":8080".
@@ -299,6 +334,10 @@ type Config struct {
 	// Replay gates the "replay from timestamp" feature (out-of-band SQL + spec
 	// writes). Disabled by default; see docs/replay-from-timestamp-design.md.
 	Replay ReplayConfig `mapstructure:"replay"`
+
+	// Vault is the connection used to resolve the console's own secret refs at
+	// startup. Only used when at least one *_ref is set.
+	Vault VaultConfig `mapstructure:"vault"`
 }
 
 // validateRestartSpecs checks each secret_sync item's restart spec: mode must be
@@ -350,6 +389,8 @@ func Load(configFile string) (*Config, error) {
 	v.SetDefault("replay.gitops_managed", false)
 	v.SetDefault("replay.sql_volume_name", "sql-scripts")
 	v.SetDefault("replay.sql_file_key", "job.sql")
+	v.SetDefault("vault.kv_mount", "kv")
+	v.SetDefault("vault.auth_mount", "kubernetes")
 
 	// Env binding: FKO_ prefix, nested keys via underscore.
 	v.SetEnvPrefix("FKO")
@@ -378,6 +419,8 @@ func Load(configFile string) (*Config, error) {
 		"secret_sync.openbao.auth_mount", "secret_sync.openbao.role", "secret_sync.openbao.token",
 		"secret_sync.openbao.cacert",
 		"replay.enabled", "replay.gitops_managed", "replay.sql_volume_name", "replay.sql_file_key",
+		"vault.addr", "vault.namespace", "vault.kv_mount", "vault.auth_mount", "vault.role",
+		"vault.token", "vault.cacert", "vault.optional",
 	} {
 		_ = v.BindEnv(key)
 	}
