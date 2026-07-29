@@ -179,14 +179,9 @@ func (s *Service) replaySteps(dep, cmName string) []PlanStep {
 			Kubectl: fmt.Sprintf(`kubectl -n %s patch configmap %s --type merge -p '{"data":{%q:"<rewritten job.sql>"}}'`, ns, cmName, key),
 		},
 		{
-			Title:   "Force stateless + mark spec dirty",
-			Detail:  "Set upgradeMode=stateless and inject flinkui.sql-checksum so the operator reconciles.",
+			Title:   "Force stateless + mark spec dirty (one patch)",
+			Detail:  "Set upgradeMode=stateless and inject flinkui.sql-checksum in a single patch. The operator then performs one stateless upgrade (cancel + redeploy fresh with the new SQL) — no separate restart is issued.",
 			Kubectl: fmt.Sprintf(`kubectl -n %s patch flinkdeployment %s --type merge -p '{"spec":{"job":{"upgradeMode":"stateless"},"flinkConfiguration":{%q:"<md5>"}}}'`, ns, dep, sqlChecksumKey),
-		},
-		{
-			Title:   "Restart to redeploy stateless",
-			Detail:  "Suspend, wait for the JobManager pod to terminate, then resume (stateless start from the timestamp).",
-			Kubectl: fmt.Sprintf(`kubectl -n %s patch flinkdeployment %s --type merge -p '{"spec":{"job":{"state":"suspended"}}}'   # then, after JM=0: state=running`, ns, dep),
 		},
 	}
 }
@@ -363,16 +358,17 @@ func (s *Service) runReplay(ctx context.Context, opID, name, dep, sourceTable st
 	if err := ca.PatchConfigMapKey(ctx, cmName, s.cfg.Replay.SQLFileKey, newSQL); err != nil {
 		return fmt.Errorf("write SQL: %w", err)
 	}
-	s.setProgress(opID, "setting upgradeMode=stateless")
+	// This single spec change (upgradeMode=stateless + flinkConfiguration diff)
+	// makes the operator perform ONE stateless upgrade — cancel the job discarding
+	// state, then redeploy fresh (new pods remount the ConfigMap and load the new
+	// SQL). We deliberately do NOT also suspend/resume ourselves: that explicit
+	// restart is redundant and makes the operator re-detect the same pending diff
+	// on resume, emitting a duplicate "UPGRADE change(s) detected".
+	s.setProgress(opID, "setting upgradeMode=stateless (operator will redeploy)")
 	if err := s.acc.PatchFlinkDeployment(ctx, dep, replayStatelessPatch(newSQL)); err != nil {
 		return fmt.Errorf("set stateless + checksum: %w", err)
 	}
-
-	// Restart so the operator redeploys stateless with the new SQL.
-	if err := s.restartInLock(ctx, dep, opID); err != nil {
-		return err
-	}
-	s.succeedOp(opID, table, fmt.Sprintf("replaying %q from %d (stateless); verify via logs (Seeking to offset)", table, fromMillis))
+	s.succeedOp(opID, table, fmt.Sprintf("replaying %q from %d (stateless); operator is redeploying — verify via logs (Seeking to offset)", table, fromMillis))
 	return nil
 }
 
@@ -478,27 +474,6 @@ func (s *Service) runRevert(ctx context.Context, opID, name, dep string) error {
 		annReplayPrevMode: nil,
 	}))
 	s.succeedOp(opID, sp.Location, fmt.Sprintf("reverted to %s; redeployed from savepoint %s", prevMode, sp.Location))
-	return nil
-}
-
-// restartInLock runs suspend -> wait for JM pod = 0 -> resume, reporting into the
-// operation. The caller MUST already hold the per-deployment lock.
-func (s *Service) restartInLock(ctx context.Context, dep, opID string) error {
-	s.setProgress(opID, "suspending")
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, statePatch("suspended")); err != nil {
-		return fmt.Errorf("suspend failed: %w", err)
-	}
-	s.waitStoppedProgress(ctx, dep, func(pods int) {
-		if pods == 0 {
-			s.setProgress(opID, "JobManager stopped; resuming")
-		} else {
-			s.setProgress(opID, fmt.Sprintf("waiting for JobManager pod to terminate (%d running)", pods))
-		}
-	})
-	s.setProgress(opID, "resuming")
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, statePatch("running")); err != nil {
-		return fmt.Errorf("resume failed: %w", err)
-	}
 	return nil
 }
 
