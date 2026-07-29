@@ -202,7 +202,7 @@ secretSync:
   enabled: false
   # Sync loop interval.
   intervalSec: 300
-  # Bump restartNonce on the item's restart_deployment when the value changed.
+  # Bump restartNonce on an item's restart target(s) when its value changed.
   autoRestart: false
   openbao:
     # OpenBao/Vault address, e.g. http://vault.vault.svc.cluster.local:8200
@@ -221,10 +221,26 @@ secretSync:
     cacert: ""
   # KV path -> Secret mapping. Only expressible via the config file, so the
   # chart renders it into the mounted config.yaml.
+  #
+  # Each item may declare which FlinkDeployment(s) to restart when the value
+  # changes (only when autoRestart is true). restart.mode is one of:
+  #   references (DEFAULT) — restart only jobs that reference the Secret
+  #                          (envFrom/secretKeyRef/volume); omit `restart` for this
+  #   all                  — restart every FlinkDeployment in the namespace
+  #   none                 — sync the Secret only, never restart
+  # Or set restart.deployments to an explicit list (mutually exclusive with mode).
   items: []
   #  - secretName: flink-job-env
   #    kvPath: config/cil/flink/demo/job-env
-  #    restartDeployment: flink-sql-job-demo   # optional, needs autoRestart
+  #    # omit `restart` => references mode (restart consumers of this Secret)
+  #  - secretName: flink-s3-credentials
+  #    kvPath: config/cil/flink/demo/s3
+  #    restart:
+  #      deployments: [flink-sql-job-a, flink-sql-job-b]
+  #  - secretName: shared-env
+  #    kvPath: config/cil/flink/demo/shared
+  #    restart:
+  #      mode: all
 
 # Replay from timestamp (out-of-band SQL ConfigMap + FlinkDeployment spec edits).
 # OFF by default: it rewrites the job's Kafka source SQL and forces a stateless

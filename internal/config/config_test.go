@@ -193,3 +193,47 @@ ha:
 		t.Fatal("expected error for auto_all without identities")
 	}
 }
+
+func TestRestartSpecResolvedMode(t *testing.T) {
+	cases := []struct {
+		spec RestartSpec
+		want string
+	}{
+		{RestartSpec{}, RestartModeReferences},                                  // empty => references
+		{RestartSpec{Mode: "all"}, RestartModeAll},                              // explicit mode
+		{RestartSpec{Mode: "none"}, RestartModeNone},                            // explicit none
+		{RestartSpec{Deployments: []string{"a"}}, "list"},                       // list wins
+		{RestartSpec{Mode: "", Deployments: []string{"a", "b"}}, "list"},        // list wins over empty mode
+	}
+	for _, tc := range cases {
+		if got := tc.spec.ResolvedMode(); got != tc.want {
+			t.Errorf("ResolvedMode(%+v) = %q, want %q", tc.spec, got, tc.want)
+		}
+	}
+}
+
+func TestLoadValidatesRestartSpec(t *testing.T) {
+	// Unknown mode is rejected.
+	cfg := &Config{SecretSync: SecretSyncConfig{Items: []SecretSyncItem{
+		{SecretName: "s", KVPath: "p", Restart: RestartSpec{Mode: "bogus"}},
+	}}}
+	if err := validateRestartSpecs(cfg); err == nil {
+		t.Error("expected error for unknown restart.mode")
+	}
+	// mode + deployments together is rejected.
+	cfg = &Config{SecretSync: SecretSyncConfig{Items: []SecretSyncItem{
+		{SecretName: "s", KVPath: "p", Restart: RestartSpec{Mode: "all", Deployments: []string{"a"}}},
+	}}}
+	if err := validateRestartSpecs(cfg); err == nil {
+		t.Error("expected error when both restart.mode and restart.deployments set")
+	}
+	// Valid specs pass.
+	cfg = &Config{SecretSync: SecretSyncConfig{Items: []SecretSyncItem{
+		{SecretName: "a", KVPath: "p", Restart: RestartSpec{Mode: "references"}},
+		{SecretName: "b", KVPath: "p", Restart: RestartSpec{Deployments: []string{"x"}}},
+		{SecretName: "c", KVPath: "p"},
+	}}}
+	if err := validateRestartSpecs(cfg); err != nil {
+		t.Errorf("valid specs should pass: %v", err)
+	}
+}

@@ -21,6 +21,7 @@ type fakeAccessor struct {
 	secrets     map[string]map[string][]byte
 	annotations map[string]string // deployment -> hash annotation
 	restarts    map[string]int    // deployment -> restart (patch) count
+	deployments []unstructured.Unstructured
 }
 
 func newFakeAccessor() *fakeAccessor {
@@ -74,6 +75,32 @@ func (f *fakeAccessor) ApplySecret(_ context.Context, name string, data map[stri
 	return nil
 }
 
+func (f *fakeAccessor) ListFlinkDeployments(_ context.Context) (*unstructured.UnstructuredList, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &unstructured.UnstructuredList{Items: f.deployments}, nil
+}
+
+// mkDeployment builds a FlinkDeployment that references the given secrets via
+// the main container's envFrom (mirrors the fko-demo base template).
+func mkDeployment(name string, envFromSecrets ...string) unstructured.Unstructured {
+	var envFrom []interface{}
+	for _, sec := range envFromSecrets {
+		envFrom = append(envFrom, map[string]interface{}{
+			"secretRef": map[string]interface{}{"name": sec},
+		})
+	}
+	u := unstructured.Unstructured{Object: map[string]interface{}{
+		"spec": map[string]interface{}{"podTemplate": map[string]interface{}{"spec": map[string]interface{}{
+			"containers": []interface{}{
+				map[string]interface{}{"name": "flink-main-container", "envFrom": envFrom},
+			},
+		}}},
+	}}
+	u.SetName(name)
+	return u
+}
+
 // TestAggregatedRestart proves: two secrets pointing at the same FlinkDeployment
 // cause at most ONE restart per cycle; no change => no restart; a change to
 // either secret => exactly one restart.
@@ -101,8 +128,8 @@ func TestAggregatedRestart(t *testing.T) {
 		AutoRestart: true,
 		OpenBao:     config.OpenBaoConfig{Addr: srv.URL, KVMount: "kv", Token: "test-token"},
 		Items: []config.SecretSyncItem{
-			{SecretName: "flink-s3-credentials", KVPath: "config/cil/flink/vault-a/s3", RestartDeployment: dep},
-			{SecretName: "flink-job-env", KVPath: "config/cil/flink/vault-a/job-env", RestartDeployment: dep},
+			{SecretName: "flink-s3-credentials", KVPath: "config/cil/flink/vault-a/s3", Restart: config.RestartSpec{Deployments: []string{dep}}},
+			{SecretName: "flink-job-env", KVPath: "config/cil/flink/vault-a/job-env", Restart: config.RestartSpec{Deployments: []string{dep}}},
 		},
 	}
 	acc := newFakeAccessor()
@@ -169,7 +196,7 @@ func TestRestartGuard(t *testing.T) {
 	cfg := config.SecretSyncConfig{
 		Enabled: true, AutoRestart: true,
 		OpenBao: config.OpenBaoConfig{Addr: srv.URL, KVMount: "kv", Token: "t"},
-		Items:   []config.SecretSyncItem{{SecretName: "s3", KVPath: "p/s3", RestartDeployment: dep}},
+		Items:   []config.SecretSyncItem{{SecretName: "s3", KVPath: "p/s3", Restart: config.RestartSpec{Deployments: []string{dep}}}},
 	}
 	acc := newFakeAccessor()
 	syncer, _ := New(acc, cfg)

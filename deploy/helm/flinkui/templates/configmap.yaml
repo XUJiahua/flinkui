@@ -73,8 +73,17 @@ data:
         {{- range .Values.secretSync.items }}
         - secret_name: {{ .secretName | quote }}
           kv_path: {{ .kvPath | quote }}
-          {{- with .restartDeployment }}
-          restart_deployment: {{ . | quote }}
+          {{- if .restart }}
+          restart:
+            {{- with .restart.mode }}
+            mode: {{ . | quote }}
+            {{- end }}
+            {{- with .restart.deployments }}
+            deployments:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
           {{- end }}
         {{- end }}
     {{- end }}

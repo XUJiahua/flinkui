@@ -27,6 +27,9 @@ const hashAnnotation = "flinkui.fko-demo.io/openbao-value-hash"
 type Accessor interface {
 	Namespace() string
 	GetFlinkDeployment(ctx context.Context, name string) (*unstructured.Unstructured, error)
+	// ListFlinkDeployments lists all FlinkDeployments (used to resolve restart
+	// targets for the "all" and "references" modes).
+	ListFlinkDeployments(ctx context.Context) (*unstructured.UnstructuredList, error)
 	PatchFlinkDeployment(ctx context.Context, name string, mergePatch []byte) error
 	cluster.SecretAccessor
 }
@@ -57,12 +60,13 @@ func nextNonce() int64 {
 
 // ItemStatus is the last outcome of syncing one item (for the UI/API).
 type ItemStatus struct {
-	SecretName        string `json:"secretName"`
-	KVPath            string `json:"kvPath"`
-	RestartDeployment string `json:"restartDeployment,omitempty"`
-	OK                bool   `json:"ok"`
-	Keys              int    `json:"keys"`
-	Error             string `json:"error,omitempty"`
+	SecretName         string   `json:"secretName"`
+	KVPath             string   `json:"kvPath"`
+	RestartMode        string   `json:"restartMode,omitempty"`
+	RestartDeployments []string `json:"restartDeployments,omitempty"`
+	OK                 bool     `json:"ok"`
+	Keys               int      `json:"keys"`
+	Error              string   `json:"error,omitempty"`
 }
 
 // Status is a snapshot of the sync loop for the UI/API.
@@ -150,11 +154,15 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 		log.Printf("secretsync: openbao login failed: %v", err)
 		for _, item := range s.cfg.Items {
 			statuses = append(statuses, ItemStatus{SecretName: item.SecretName, KVPath: item.KVPath,
-				RestartDeployment: item.RestartDeployment, Error: "openbao login: " + err.Error()})
+				RestartMode: item.Restart.ResolvedMode(), Error: "openbao login: " + err.Error()})
 		}
 		s.recordSync(statuses)
 		return
 	}
+
+	// deployments are listed at most once per cycle (only when an item needs the
+	// "all" or "references" mode) and cached for reuse across items.
+	crCache := newDeploymentCache(ctx, s.acc)
 
 	// Phase 1: sync every Secret. Accumulate — PER TARGET FlinkDeployment — the
 	// merged key/value set of ALL its secrets, so a job consuming several secrets
@@ -164,15 +172,25 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 	merged := make(map[string]map[string]string)
 	failed := make(map[string]bool)
 	for _, item := range s.cfg.Items {
-		st := ItemStatus{SecretName: item.SecretName, KVPath: item.KVPath, RestartDeployment: item.RestartDeployment}
+		st := ItemStatus{SecretName: item.SecretName, KVPath: item.KVPath, RestartMode: item.Restart.ResolvedMode()}
+
+		// Resolve restart targets up front (independent of the KV read) so a read
+		// failure can still mark the intended deployments as failed.
+		targets, terr := restartTargets(item, crCache)
+		if terr != nil {
+			log.Printf("secretsync: resolve restart targets for %s: %v", item.SecretName, terr)
+			st.Error = "resolve targets: " + terr.Error()
+			statuses = append(statuses, st)
+			continue
+		}
+		st.RestartDeployments = targets
+
 		data, err := s.bao.readKV(token, item.KVPath)
 		if err != nil {
 			log.Printf("secretsync: read %s: %v", item.KVPath, err)
 			st.Error = "read: " + err.Error()
 			statuses = append(statuses, st)
-			if item.RestartDeployment != "" {
-				failed[item.RestartDeployment] = true
-			}
+			markFailed(failed, targets)
 			continue
 		}
 		byteData := make(map[string][]byte, len(data))
@@ -183,22 +201,22 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 			log.Printf("secretsync: apply secret %s: %v", item.SecretName, err)
 			st.Error = "apply: " + err.Error()
 			statuses = append(statuses, st)
-			if item.RestartDeployment != "" {
-				failed[item.RestartDeployment] = true
-			}
+			markFailed(failed, targets)
 			continue
 		}
 		st.OK = true
 		st.Keys = len(data)
 		statuses = append(statuses, st)
-		if s.cfg.AutoRestart && item.RestartDeployment != "" {
-			m := merged[item.RestartDeployment]
-			if m == nil {
-				m = make(map[string]string)
-				merged[item.RestartDeployment] = m
-			}
-			for k, v := range data {
-				m[item.SecretName+"/"+k] = v
+		if s.cfg.AutoRestart {
+			for _, dep := range targets {
+				m := merged[dep]
+				if m == nil {
+					m = make(map[string]string)
+					merged[dep] = m
+				}
+				for k, v := range data {
+					m[item.SecretName+"/"+k] = v
+				}
 			}
 		}
 	}
@@ -214,6 +232,12 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 		}
 	}
 	s.recordSync(statuses)
+}
+
+func markFailed(failed map[string]bool, deps []string) {
+	for _, d := range deps {
+		failed[d] = true
+	}
 }
 
 func (s *Syncer) setRunning(v bool) {
