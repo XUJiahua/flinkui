@@ -9,6 +9,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { PlanSteps } from "@/components/plan-steps";
 
 interface ReplayDialogProps {
   open: boolean;
@@ -167,6 +168,7 @@ export function ReplayDialog({ open, jobName, cluster, onClose }: ReplayDialogPr
               <span className="font-mono">{new Date(plan.fromMillis).toLocaleString()}</span>.
             </p>
             <SqlDiff original={plan.originalSql} next={plan.newSql} />
+            <PlanSteps steps={plan.steps} title="What the replay will do" />
           </div>
         )}
 

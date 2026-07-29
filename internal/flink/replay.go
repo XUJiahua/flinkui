@@ -43,13 +43,24 @@ type JobSQL struct {
 	KafkaSources []string `json:"kafkaSources"`
 }
 
+// PlanStep describes one step the console will perform, with the equivalent
+// kubectl command for transparency / manual recovery. The console executes these
+// via the Kubernetes API (client-go), not by shelling out to kubectl; the
+// command is an equivalent for reference.
+type PlanStep struct {
+	Title   string `json:"title"`
+	Detail  string `json:"detail,omitempty"`
+	Kubectl string `json:"kubectl,omitempty"`
+}
+
 // ReplayPlan is the preview of a replay edit (no writes performed).
 type ReplayPlan struct {
-	Table       string `json:"table"`
-	FromMillis  int64  `json:"fromMillis"`
-	UpgradeMode string `json:"upgradeMode"` // will be set to "stateless"
-	OriginalSQL string `json:"originalSql"`
-	NewSQL      string `json:"newSql"`
+	Table       string     `json:"table"`
+	FromMillis  int64      `json:"fromMillis"`
+	UpgradeMode string     `json:"upgradeMode"` // will be set to "stateless"
+	OriginalSQL string     `json:"originalSql"`
+	NewSQL      string     `json:"newSql"`
+	Steps       []PlanStep `json:"steps"`
 }
 
 // ReplaySession reports the current replay state read from CR annotations plus a
@@ -64,6 +75,12 @@ type ReplaySession struct {
 	UpgradeMode     string `json:"upgradeMode,omitempty"`
 	Verdict         string `json:"verdict,omitempty"` // ok | still-last-state | offset-boundary | pending
 	VerdictDetail   string `json:"verdictDetail,omitempty"`
+	// ConfigMap is the resolved SQL ConfigMap name (for the kubectl equivalents).
+	ConfigMap string `json:"configMap,omitempty"`
+	// RevertSteps is the plan the console will run on revert, with equivalent
+	// kubectl commands (the savepoint path is only known at run time, shown as
+	// <savepoint-path>).
+	RevertSteps []PlanStep `json:"revertSteps,omitempty"`
 }
 
 // cmAccessor returns the ConfigMap accessor if the underlying accessor supports
@@ -141,7 +158,69 @@ func (s *Service) ReplayPreview(ctx context.Context, name, sourceTable string, f
 		UpgradeMode: "stateless",
 		OriginalSQL: cur.SQL,
 		NewSQL:      newSQL,
+		Steps:       s.replaySteps(s.cfg.DeploymentName(name), cur.ConfigMap),
 	}, nil
+}
+
+// replaySteps returns the kubectl-equivalent plan for a forward replay. The
+// console executes these via the Kubernetes API; the commands are for reference.
+func (s *Service) replaySteps(dep, cmName string) []PlanStep {
+	ns := s.cfg.Cluster.Namespace
+	key := s.cfg.Replay.SQLFileKey
+	return []PlanStep{
+		{
+			Title:   "Back up current SQL",
+			Detail:  "Copy the current job SQL to a backup key so revert can restore it verbatim.",
+			Kubectl: fmt.Sprintf(`# console copies data[%q] -> data[%q] on configmap/%s`, key, key+backupKeySuffix, cmName),
+		},
+		{
+			Title:   "Rewrite the Kafka source SQL",
+			Detail:  "Set scan.startup.mode=timestamp (+ timestamp-millis, auto.offset.reset) in the target table.",
+			Kubectl: fmt.Sprintf(`kubectl -n %s patch configmap %s --type merge -p '{"data":{%q:"<rewritten job.sql>"}}'`, ns, cmName, key),
+		},
+		{
+			Title:   "Force stateless + mark spec dirty",
+			Detail:  "Set upgradeMode=stateless and inject flinkui.sql-checksum so the operator reconciles.",
+			Kubectl: fmt.Sprintf(`kubectl -n %s patch flinkdeployment %s --type merge -p '{"spec":{"job":{"upgradeMode":"stateless"},"flinkConfiguration":{%q:"<md5>"}}}'`, ns, dep, sqlChecksumKey),
+		},
+		{
+			Title:   "Restart to redeploy stateless",
+			Detail:  "Suspend, wait for the JobManager pod to terminate, then resume (stateless start from the timestamp).",
+			Kubectl: fmt.Sprintf(`kubectl -n %s patch flinkdeployment %s --type merge -p '{"spec":{"job":{"state":"suspended"}}}'   # then, after JM=0: state=running`, ns, dep),
+		},
+	}
+}
+
+// revertSteps returns the kubectl-equivalent plan for a revert. The savepoint
+// path is only known at run time and is shown as <savepoint-path>.
+func (s *Service) revertSteps(dep, cmName, prevMode string) []PlanStep {
+	ns := s.cfg.Cluster.Namespace
+	key := s.cfg.Replay.SQLFileKey
+	return []PlanStep{
+		{
+			Title:  "Preflight",
+			Detail: "Require the job to be RUNNING/STABLE so a savepoint can be taken.",
+		},
+		{
+			Title:   "Take a savepoint",
+			Detail:  "Trigger a savepoint via the JobManager REST API and wait for it to complete.",
+			Kubectl: `# console POSTs /jobs/<jobId>/savepoints via pod exec; result path => <savepoint-path>`,
+		},
+		{
+			Title:   "Restore the original SQL",
+			Detail:  "Write the backed-up job SQL back and refresh flinkui.sql-checksum.",
+			Kubectl: fmt.Sprintf(`kubectl -n %s patch configmap %s --type merge -p '{"data":{%q:"<original job.sql>"}}'`, ns, cmName, key),
+		},
+		{
+			Title:   "Redeploy from the savepoint",
+			Detail:  fmt.Sprintf("Restore state from the savepoint (deterministic, no HA-metadata dependency) and return to upgradeMode=%s.", prevMode),
+			Kubectl: fmt.Sprintf(`kubectl -n %s patch flinkdeployment %s --type merge -p '{"spec":{"job":{"state":"running","upgradeMode":%q,"initialSavepointPath":"<savepoint-path>","savepointRedeployNonce":<n>}}}'`, ns, dep, prevMode),
+		},
+		{
+			Title:  "Clear the replay session",
+			Detail: "Remove the SQL backup key and the replay annotations.",
+		},
+	}
 }
 
 // SetUpgradeMode patches spec.job.upgradeMode after validating the mode.
@@ -175,6 +254,14 @@ func (s *Service) ReplaySessionInfo(ctx context.Context, name string) (*ReplaySe
 	sess.UpgradeMode, _, _ = unstructured.NestedString(cr.Object, "spec", "job", "upgradeMode")
 	if sess.Active {
 		sess.Verdict, sess.VerdictDetail = s.replayVerdict(ctx, name)
+		prev := sess.PrevUpgradeMode
+		if prev == "" {
+			prev = "last-state"
+		}
+		if cmName, err := s.resolveSQLConfigMap(ctx, dep); err == nil {
+			sess.ConfigMap = cmName
+			sess.RevertSteps = s.revertSteps(dep, cmName, prev)
+		}
 	}
 	return sess, nil
 }
@@ -315,10 +402,20 @@ func (s *Service) runRevert(ctx context.Context, opID, name, dep string) error {
 	l.Lock()
 	defer l.Unlock()
 
+	// Preflight: revert restores state from a fresh savepoint, so the job must be
+	// healthy enough to take one. If it is not, we refuse rather than attempt a
+	// last-state transition that can strand the operator ("JM deployment is
+	// missing and HA metadata is not available"). The operator can instead
+	// recover from the latest checkpoint via Rollback.
 	s.setProgress(opID, "preflight")
 	cr, err := s.acc.GetFlinkDeployment(ctx, dep)
 	if err != nil {
 		return err
+	}
+	if !s.summaryFrom(cr).Healthy {
+		return fmt.Errorf("job is not RUNNING/STABLE; cannot take a savepoint to revert safely. " +
+			"Wait for it to stabilize and retry, or recover from the latest checkpoint via Rollback " +
+			"(the replay session is kept so you can retry).")
 	}
 	ann := cr.GetAnnotations()
 	prevMode := ann[annReplayPrevMode]
@@ -342,22 +439,37 @@ func (s *Service) runRevert(ctx context.Context, opID, name, dep string) error {
 		return fmt.Errorf("no pre-replay SQL backup found (key %q); nothing to revert", backupKey)
 	}
 
+	// 1. Take a savepoint of the (stateless) replay job to get a deterministic
+	//    recovery point. Nothing has been mutated yet, so a failure here is safe
+	//    to retry and leaves the replay running.
+	s.setProgress(opID, "taking savepoint")
+	sp, err := s.savepointInLock(ctx, dep)
+	if err != nil {
+		return fmt.Errorf("savepoint before revert failed (replay left intact, retry later): %w", err)
+	}
+	// Surface the recovery point immediately: if a later step fails, the operator
+	// has the exact path to redeploy from manually.
+	s.ops.update(opID, func(o *Operation) { o.Result = sp.Location })
+	s.setProgress(opID, "savepoint complete: "+sp.Location)
+
+	// 2. Restore the original SQL + refresh the checksum.
 	s.setProgress(opID, "restoring original SQL")
 	if err := ca.PatchConfigMapKey(ctx, cmName, s.cfg.Replay.SQLFileKey, backupSQL); err != nil {
-		return fmt.Errorf("restore SQL: %w", err)
+		return fmt.Errorf("restore SQL failed (savepoint=%s kept for manual recovery): %w", sp.Location, err)
 	}
 	if err := s.acc.PatchFlinkDeployment(ctx, dep, sqlChecksumPatch(backupSQL)); err != nil {
-		return fmt.Errorf("update sql-checksum: %w", err)
-	}
-	s.setProgress(opID, fmt.Sprintf("setting upgradeMode=%s", prevMode))
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, upgradeModePatch(prevMode)); err != nil {
-		return fmt.Errorf("restore upgradeMode: %w", err)
-	}
-	if err := s.restartInLock(ctx, dep, opID); err != nil {
-		return err
+		return fmt.Errorf("update sql-checksum failed (savepoint=%s): %w", sp.Location, err)
 	}
 
-	// Clear the backup key + replay annotations.
+	// 3. Redeploy from the savepoint (deterministic; no HA-metadata dependency),
+	//    returning to the previous upgradeMode. This mirrors Rollback and avoids
+	//    the fragile stateless->last-state suspend/resume that could strand the op.
+	s.setProgress(opID, fmt.Sprintf("redeploying from savepoint (upgradeMode=%s)", prevMode))
+	if err := s.acc.PatchFlinkDeployment(ctx, dep, redeployFromSavepointPatch(prevMode, sp.Location)); err != nil {
+		return fmt.Errorf("redeploy from savepoint %s failed: %w", sp.Location, err)
+	}
+
+	// 4. Only after a successful redeploy do we clear the backup + annotations.
 	s.setProgress(opID, "clearing replay session")
 	_ = ca.DeleteConfigMapKey(ctx, cmName, backupKey)
 	_ = s.acc.PatchFlinkDeployment(ctx, dep, annotationsPatch(map[string]any{
@@ -368,7 +480,7 @@ func (s *Service) runRevert(ctx context.Context, opID, name, dep string) error {
 		annReplayTable:    nil,
 		annReplayPrevMode: nil,
 	}))
-	s.succeedOp(opID, "", fmt.Sprintf("reverted to %s; resuming from latest checkpoint", prevMode))
+	s.succeedOp(opID, sp.Location, fmt.Sprintf("reverted to %s; redeployed from savepoint %s", prevMode, sp.Location))
 	return nil
 }
 
@@ -402,6 +514,21 @@ func (s *Service) setProgress(opID, msg string) {
 func upgradeModePatch(mode string) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"spec": map[string]any{"job": map[string]any{"upgradeMode": mode}},
+	})
+	return b
+}
+
+// redeployFromSavepointPatch forces a redeploy that restores state from path,
+// returning the job to the given upgradeMode. The changing savepointRedeployNonce
+// is what triggers the operator to redeploy from initialSavepointPath.
+func redeployFromSavepointPatch(mode, path string) []byte {
+	b, _ := json.Marshal(map[string]any{
+		"spec": map[string]any{"job": map[string]any{
+			"state":                  "running",
+			"upgradeMode":            mode,
+			"initialSavepointPath":   path,
+			"savepointRedeployNonce": NextRedeployNonce(),
+		}},
 	})
 	return b
 }

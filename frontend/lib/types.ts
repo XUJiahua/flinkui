@@ -76,12 +76,19 @@ export interface JobSQL {
   kafkaSources: string[] | null;
 }
 
+export interface PlanStep {
+  title: string;
+  detail?: string;
+  kubectl?: string;
+}
+
 export interface ReplayPlan {
   table: string;
   fromMillis: number;
   upgradeMode: string;
   originalSql: string;
   newSql: string;
+  steps?: PlanStep[];
 }
 
 export interface ReplaySession {
@@ -94,6 +101,8 @@ export interface ReplaySession {
   upgradeMode?: string;
   verdict?: string;
   verdictDetail?: string;
+  configMap?: string;
+  revertSteps?: PlanStep[];
 }
 
 export interface SavepointResult {
