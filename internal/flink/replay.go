@@ -355,19 +355,17 @@ func (s *Service) runReplay(ctx context.Context, opID, name, dep, sourceTable st
 		return fmt.Errorf("annotate replay session: %w", err)
 	}
 
-	// Edit SQL + inject checksum so the operator reconciles on restart.
+	// Edit the SQL, then in ONE spec patch flip to stateless AND bump the
+	// sql-checksum. Doing both in a single patch means the operator reconciles
+	// once (one UPGRADE with a coherent diff) instead of twice, and never starts
+	// a transient last-state upgrade of the new SQL before stateless takes effect.
 	s.setProgress(opID, "writing replay SQL")
 	if err := ca.PatchConfigMapKey(ctx, cmName, s.cfg.Replay.SQLFileKey, newSQL); err != nil {
 		return fmt.Errorf("write SQL: %w", err)
 	}
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, sqlChecksumPatch(newSQL)); err != nil {
-		return fmt.Errorf("inject sql-checksum: %w", err)
-	}
-
-	// Force stateless start.
 	s.setProgress(opID, "setting upgradeMode=stateless")
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, upgradeModePatch("stateless")); err != nil {
-		return fmt.Errorf("set stateless: %w", err)
+	if err := s.acc.PatchFlinkDeployment(ctx, dep, replayStatelessPatch(newSQL)); err != nil {
+		return fmt.Errorf("set stateless + checksum: %w", err)
 	}
 
 	// Restart so the operator redeploys stateless with the new SQL.
@@ -452,20 +450,19 @@ func (s *Service) runRevert(ctx context.Context, opID, name, dep string) error {
 	s.ops.update(opID, func(o *Operation) { o.Result = sp.Location })
 	s.setProgress(opID, "savepoint complete: "+sp.Location)
 
-	// 2. Restore the original SQL + refresh the checksum.
+	// 2. Restore the original SQL in the ConfigMap (the checksum is refreshed
+	//    together with the redeploy patch in step 3, so this stays one reconcile).
 	s.setProgress(opID, "restoring original SQL")
 	if err := ca.PatchConfigMapKey(ctx, cmName, s.cfg.Replay.SQLFileKey, backupSQL); err != nil {
 		return fmt.Errorf("restore SQL failed (savepoint=%s kept for manual recovery): %w", sp.Location, err)
 	}
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, sqlChecksumPatch(backupSQL)); err != nil {
-		return fmt.Errorf("update sql-checksum failed (savepoint=%s): %w", sp.Location, err)
-	}
 
 	// 3. Redeploy from the savepoint (deterministic; no HA-metadata dependency),
-	//    returning to the previous upgradeMode. This mirrors Rollback and avoids
-	//    the fragile stateless->last-state suspend/resume that could strand the op.
+	//    returning to the previous upgradeMode and refreshing the sql-checksum in
+	//    the SAME patch so the operator reconciles once (not twice). This mirrors
+	//    Rollback and avoids the fragile stateless->last-state suspend/resume.
 	s.setProgress(opID, fmt.Sprintf("redeploying from savepoint (upgradeMode=%s)", prevMode))
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, redeployFromSavepointPatch(prevMode, sp.Location)); err != nil {
+	if err := s.acc.PatchFlinkDeployment(ctx, dep, redeployFromSavepointPatch(prevMode, sp.Location, backupSQL)); err != nil {
 		return fmt.Errorf("redeploy from savepoint %s failed: %w", sp.Location, err)
 	}
 
@@ -518,27 +515,42 @@ func upgradeModePatch(mode string) []byte {
 	return b
 }
 
-// redeployFromSavepointPatch forces a redeploy that restores state from path,
-// returning the job to the given upgradeMode. The changing savepointRedeployNonce
-// is what triggers the operator to redeploy from initialSavepointPath.
-func redeployFromSavepointPatch(mode, path string) []byte {
+// sqlChecksum returns the md5 the operator watches (spec.flinkConfiguration
+// flinkui.sql-checksum) so a job.sql change triggers exactly one reconcile.
+func sqlChecksum(sql string) string {
+	sum := md5.Sum([]byte(sql))
+	return hex.EncodeToString(sum[:])
+}
+
+// replayStatelessPatch flips the job to stateless AND bumps the sql-checksum in a
+// SINGLE spec patch, so the operator sees one coherent diff (upgradeMode +
+// checksum) and reconciles once — never a transient last-state upgrade of the
+// new SQL first.
+func replayStatelessPatch(sql string) []byte {
 	b, _ := json.Marshal(map[string]any{
-		"spec": map[string]any{"job": map[string]any{
-			"state":                  "running",
-			"upgradeMode":            mode,
-			"initialSavepointPath":   path,
-			"savepointRedeployNonce": NextRedeployNonce(),
-		}},
+		"spec": map[string]any{
+			"job":                map[string]any{"upgradeMode": "stateless"},
+			"flinkConfiguration": map[string]any{sqlChecksumKey: sqlChecksum(sql)},
+		},
 	})
 	return b
 }
 
-func sqlChecksumPatch(sql string) []byte {
-	sum := md5.Sum([]byte(sql))
+// redeployFromSavepointPatch forces a redeploy that restores state from path,
+// returns the job to the given upgradeMode, and refreshes the sql-checksum — all
+// in one spec patch (a single reconcile). The changing savepointRedeployNonce is
+// what triggers the operator to redeploy from initialSavepointPath.
+func redeployFromSavepointPatch(mode, path, sql string) []byte {
 	b, _ := json.Marshal(map[string]any{
-		"spec": map[string]any{"flinkConfiguration": map[string]any{
-			sqlChecksumKey: hex.EncodeToString(sum[:]),
-		}},
+		"spec": map[string]any{
+			"job": map[string]any{
+				"state":                  "running",
+				"upgradeMode":            mode,
+				"initialSavepointPath":   path,
+				"savepointRedeployNonce": NextRedeployNonce(),
+			},
+			"flinkConfiguration": map[string]any{sqlChecksumKey: sqlChecksum(sql)},
+		},
 	})
 	return b
 }
