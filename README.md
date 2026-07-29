@@ -150,6 +150,14 @@ can also be supplied with `-config path.yaml`.
 | `FKO_SECRET_SYNC_OPENBAO_ROLE` | `vault-app-role` | Kubernetes auth role bound to this pod's ServiceAccount |
 | `FKO_SECRET_SYNC_OPENBAO_TOKEN` | _(empty)_ | static token (debug); empty ⇒ Kubernetes auth with the SA token |
 | `FKO_SECRET_SYNC_OPENBAO_CACERT` | _(empty)_ | CA file for https (mount it yourself) |
+| `FKO_VAULT_ADDR` | _(empty)_ | OpenBao/Vault address for resolving the console's OWN secret refs at startup (empty ⇒ disabled) |
+| `FKO_VAULT_NAMESPACE` | _(empty)_ | Vault Enterprise namespace (OpenBao OSS: empty) |
+| `FKO_VAULT_KV_MOUNT` | `kv` | KV v2 mount for the refs |
+| `FKO_VAULT_AUTH_MOUNT` | `kubernetes` | Kubernetes auth mount |
+| `FKO_VAULT_ROLE` | `vault-app-role` | Kubernetes auth role bound to this pod's ServiceAccount |
+| `FKO_VAULT_TOKEN` | _(empty)_ | static token (debug); empty ⇒ Kubernetes auth with the SA token |
+| `FKO_VAULT_CACERT` | _(empty)_ | CA file for https |
+| `FKO_VAULT_OPTIONAL` | `false` | on Vault error, fall back to literal/env values instead of failing to start |
 
 > **Secret sync (optional).** `secret_sync.items` — the KV path → Secret mapping —
 > is a list of objects and therefore **cannot be expressed with `FKO_*` env vars**;
@@ -209,6 +217,31 @@ can also be supplied with `-config path.yaml`.
 > (suspend/resume/restart/savepoint/rollback/release/promote) emits a structured
 > JSON audit record to stdout (`event=audit`, with user, operation, resource,
 > status, duration). Fine-grained RBAC is on the roadmap.
+
+> **Console secrets from Vault (optional).** Besides env / `--set` / a pre-created
+> Secret, the console's OWN sensitive fields can be resolved from OpenBao/Vault at
+> **startup**: set the top-level `FKO_VAULT_*` connection and a per-field reference
+> (config file only, since refs are objects): `auth.password_ref`,
+> `auth.session_secret_ref`, `auth.ldap.bind_password_ref`,
+> `cluster.s3.access_key_ref`, `cluster.s3.secret_key_ref` — each `{path, key}`
+> into a KV v2 secret. A field is resolved only when its ref is set **and** the
+> literal/env value is empty (literal/env wins). Missing/unreachable Vault fails
+> startup unless `FKO_VAULT_OPTIONAL=true`. This is distinct from secret-sync
+> (which syncs the *jobs'* Secrets); it needs the pod's ServiceAccount bound to a
+> Vault role/policy that can read those paths. Values change requires a Pod
+> restart (read-once). See [design](docs/console-secrets-from-vault-design.md).
+>
+> ```yaml
+> vault:
+>   addr: "http://vault.vault.svc.cluster.local:8200"
+>   role: "flinkui-role"
+> auth:
+>   session_secret_ref: { path: config/cil/flink/console/auth, key: session-secret }
+> cluster:
+>   s3:
+>     access_key_ref: { path: config/cil/flink/console/s3, key: access-key }
+>     secret_key_ref: { path: config/cil/flink/console/s3, key: secret-key }
+> ```
 
 ## Container / in-cluster deployment
 

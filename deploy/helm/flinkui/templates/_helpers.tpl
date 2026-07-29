@@ -82,3 +82,11 @@ Name of the S3 Secret (created or existing).
 {{- printf "%s-s3" (include "flinkui.fullname" .) }}
 {{- end }}
 {{- end }}
+
+{{/*
+Whether the mounted config file (/etc/flinkui/config.yaml) is needed: HA groups,
+secret-sync, or Vault (console-own secret refs) all render into it.
+*/}}
+{{- define "flinkui.needConfig" -}}
+{{- if or .Values.ha.groups .Values.ha.autoAll .Values.secretSync.enabled .Values.vault.addr -}}true{{- end -}}
+{{- end -}}

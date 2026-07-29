@@ -41,6 +41,11 @@ auth:
   #   username, password, session-secret (and ldap-bind-password if LDAP search
   #   bind is used).
   existingSecret: ""
+  # -- Optional: resolve auth secrets from OpenBao/Vault at startup (see the
+  # top-level `vault:` block). Set {path,key}; leave empty to use password/
+  # sessionSecret above. The literal/env value wins when both are set.
+  passwordRef: { path: "", key: "" }
+  sessionSecretRef: { path: "", key: "" }
   # -- Optional LDAP / Active Directory authentication. -----------------------
   # When enabled, a login is accepted if it matches the local username/password
   # above OR authenticates against LDAP, so the local account stays usable as a
@@ -68,6 +73,8 @@ auth:
     # "(sAMAccountName=%s)" for Active Directory.
     userFilter: ""
     timeoutSec: 10
+    # Optional: resolve bindPassword from Vault at startup (see `vault:`).
+    bindPasswordRef: { path: "", key: "" }
 
 # -- S3 / MinIO for the rollback recovery-point selector (optional). --------
 s3:
@@ -91,6 +98,9 @@ s3:
   secretKey: ""
   # Use an existing Secret with keys: access-key, secret-key
   existingSecret: ""
+  # Optional: resolve S3 credentials from Vault at startup (see `vault:`).
+  accessKeyRef: { path: "", key: "" }
+  secretKeyRef: { path: "", key: "" }
 
 # -- Extra raw FKO_* env vars (advanced / escape hatch). --------------------
 extraEnv: []
@@ -258,3 +268,21 @@ replay:
   sqlVolumeName: "sql-scripts"
   # ConfigMap data key holding the job SQL.
   sqlFileKey: "job.sql"
+
+# -- OpenBao/Vault for the console's OWN secrets (optional) -----------------
+# When set, the console resolves *_ref fields (auth.passwordRef /
+# sessionSecretRef, auth.ldap.bindPasswordRef, s3.accessKeyRef / secretKeyRef)
+# from Vault at STARTUP, so no plaintext needs to live in values / Secrets.
+# Distinct from secretSync (which syncs the JOBS' secrets). The console SA must
+# be bound to a Vault role/policy that can read these KV paths.
+# See docs/console-secrets-from-vault-design.md.
+vault:
+  # Leave addr empty to disable. Setting it renders vault:* into the config file.
+  addr: ""
+  # namespace: ""            # Vault Enterprise namespace (OpenBao OSS: leave empty)
+  kvMount: "kv"
+  authMount: "kubernetes"
+  role: "vault-app-role"     # k8s auth role bound to the console ServiceAccount
+  # token: ""                # static token (debug); empty => k8s auth via SA token
+  # cacert: ""               # CA file path for https (mount it yourself)
+  # optional: false          # true => on Vault error fall back to literal/env instead of failing
