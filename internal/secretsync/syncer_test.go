@@ -124,9 +124,8 @@ func TestAggregatedRestart(t *testing.T) {
 
 	dep := "flink-sql-job-demo-kafka-redis"
 	cfg := config.SecretSyncConfig{
-		Enabled:     true,
-		AutoRestart: true,
-		OpenBao:     config.OpenBaoConfig{Addr: srv.URL, KVMount: "kv", Token: "test-token"},
+		Enabled: true,
+		OpenBao: config.OpenBaoConfig{Addr: srv.URL, KVMount: "kv", Token: "test-token"},
 		Items: []config.SecretSyncItem{
 			{SecretName: "flink-s3-credentials", KVPath: "config/cil/flink/vault-a/s3", Restart: config.RestartSpec{Deployments: []string{dep}}},
 			{SecretName: "flink-job-env", KVPath: "config/cil/flink/vault-a/job-env", Restart: config.RestartSpec{Deployments: []string{dep}}},
@@ -194,7 +193,7 @@ func TestRestartGuard(t *testing.T) {
 
 	dep := "job-a"
 	cfg := config.SecretSyncConfig{
-		Enabled: true, AutoRestart: true,
+		Enabled: true,
 		OpenBao: config.OpenBaoConfig{Addr: srv.URL, KVMount: "kv", Token: "t"},
 		Items:   []config.SecretSyncItem{{SecretName: "s3", KVPath: "p/s3", Restart: config.RestartSpec{Deployments: []string{dep}}}},
 	}

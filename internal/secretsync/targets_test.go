@@ -41,9 +41,10 @@ func TestRestartTargetsResolution(t *testing.T) {
 		item config.SecretSyncItem
 		want []string
 	}{
-		{"references-shared", config.SecretSyncItem{SecretName: "flink-job-env"}, []string{"job-a", "job-b"}},
-		{"references-narrow", config.SecretSyncItem{SecretName: "flink-s3-credentials"}, []string{"job-b", "job-c"}},
-		{"references-none", config.SecretSyncItem{SecretName: "unused-secret"}, nil},
+		{"default-empty-is-none", config.SecretSyncItem{SecretName: "flink-job-env"}, nil},
+		{"references-shared", config.SecretSyncItem{SecretName: "flink-job-env", Restart: config.RestartSpec{Mode: "references"}}, []string{"job-a", "job-b"}},
+		{"references-narrow", config.SecretSyncItem{SecretName: "flink-s3-credentials", Restart: config.RestartSpec{Mode: "references"}}, []string{"job-b", "job-c"}},
+		{"references-no-consumers", config.SecretSyncItem{SecretName: "unused-secret", Restart: config.RestartSpec{Mode: "references"}}, nil},
 		{"all", config.SecretSyncItem{SecretName: "flink-job-env", Restart: config.RestartSpec{Mode: "all"}}, []string{"job-a", "job-b", "job-c"}},
 		{"none", config.SecretSyncItem{SecretName: "flink-job-env", Restart: config.RestartSpec{Mode: "none"}}, nil},
 		{"list", config.SecretSyncItem{SecretName: "flink-job-env", Restart: config.RestartSpec{Deployments: []string{"job-x", "job-a"}}}, []string{"job-a", "job-x"}},
@@ -63,7 +64,7 @@ func TestRestartTargetsResolution(t *testing.T) {
 
 // TestReferencesModeIsDefaultAndRestartsOnlyConsumers proves the default mode
 // restarts exactly the deployments that reference the changed secret.
-func TestReferencesModeIsDefaultAndRestartsOnlyConsumers(t *testing.T) {
+func TestReferencesModeRestartsOnlyConsumers(t *testing.T) {
 	kv := map[string]map[string]string{
 		"p/job-env": {"KAFKA": "k1"},
 	}
@@ -77,10 +78,11 @@ func TestReferencesModeIsDefaultAndRestartsOnlyConsumers(t *testing.T) {
 		mkDeployment("job-c", "other-secret"),  // does NOT
 	}
 	cfg := config.SecretSyncConfig{
-		Enabled: true, AutoRestart: true,
+		Enabled: true,
 		OpenBao: config.OpenBaoConfig{Addr: srv.URL, KVMount: "kv", Token: "t"},
-		// No Restart block => references mode (default).
-		Items: []config.SecretSyncItem{{SecretName: "flink-job-env", KVPath: "p/job-env"}},
+		// references must be explicit now (default is none / sync-only).
+		Items: []config.SecretSyncItem{{SecretName: "flink-job-env", KVPath: "p/job-env",
+			Restart: config.RestartSpec{Mode: "references"}}},
 	}
 	syncer, err := New(acc, cfg)
 	if err != nil || syncer == nil {

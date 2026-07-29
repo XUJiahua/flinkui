@@ -199,7 +199,7 @@ func TestRestartSpecResolvedMode(t *testing.T) {
 		spec RestartSpec
 		want string
 	}{
-		{RestartSpec{}, RestartModeReferences},                                  // empty => references
+		{RestartSpec{}, RestartModeNone},                                       // empty => none (sync only)
 		{RestartSpec{Mode: "all"}, RestartModeAll},                              // explicit mode
 		{RestartSpec{Mode: "none"}, RestartModeNone},                            // explicit none
 		{RestartSpec{Deployments: []string{"a"}}, "list"},                       // list wins

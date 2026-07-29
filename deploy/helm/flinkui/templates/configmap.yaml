@@ -52,7 +52,6 @@ data:
     secret_sync:
       enabled: true
       interval_sec: {{ .Values.secretSync.intervalSec | default 300 }}
-      auto_restart: {{ .Values.secretSync.autoRestart | default false }}
       openbao:
         {{- with .Values.secretSync.openbao.addr }}
         addr: {{ . | quote }}

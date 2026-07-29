@@ -72,7 +72,6 @@ type ItemStatus struct {
 // Status is a snapshot of the sync loop for the UI/API.
 type Status struct {
 	Enabled      bool              `json:"enabled"`
-	AutoRestart  bool              `json:"autoRestart"`
 	IntervalSec  int               `json:"intervalSec"`
 	LastSyncUnix int64             `json:"lastSyncUnix"` // 0 = never synced yet
 	Running      bool              `json:"running"`      // a sync is in progress
@@ -123,7 +122,7 @@ func (s *Syncer) Run(ctx context.Context) {
 	if interval <= 0 {
 		interval = 5 * time.Minute
 	}
-	log.Printf("secretsync: started (interval=%s, autoRestart=%v, items=%d)", interval, s.cfg.AutoRestart, len(s.cfg.Items))
+	log.Printf("secretsync: started (interval=%s, items=%d)", interval, len(s.cfg.Items))
 	s.syncOnce(ctx)
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -207,16 +206,15 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 		st.OK = true
 		st.Keys = len(data)
 		statuses = append(statuses, st)
-		if s.cfg.AutoRestart {
-			for _, dep := range targets {
-				m := merged[dep]
-				if m == nil {
-					m = make(map[string]string)
-					merged[dep] = m
-				}
-				for k, v := range data {
-					m[item.SecretName+"/"+k] = v
-				}
+		// Accumulate for restart per resolved target (empty for "none" items).
+		for _, dep := range targets {
+			m := merged[dep]
+			if m == nil {
+				m = make(map[string]string)
+				merged[dep] = m
+			}
+			for k, v := range data {
+				m[item.SecretName+"/"+k] = v
 			}
 		}
 	}
@@ -276,7 +274,6 @@ func (s *Syncer) Status() Status {
 	copy(items, s.items)
 	return Status{
 		Enabled:      true,
-		AutoRestart:  s.cfg.AutoRestart,
 		IntervalSec:  s.cfg.IntervalSec,
 		LastSyncUnix: last,
 		Running:      s.running,

@@ -192,8 +192,8 @@ type SecretSyncItem struct {
 	// KVPath is the KV v2 path under the mount (e.g. config/cil/flink/vault-a/s3).
 	KVPath string `mapstructure:"kv_path"`
 	// Restart selects which deployments to restart on change. When omitted it
-	// defaults to "references" mode (restart only the jobs that actually consume
-	// this Secret). Restarts still happen only when auto_restart is enabled.
+	// defaults to "none" (sync the Secret only). Set restart.mode to
+	// references|all or restart.deployments to an explicit list to opt in.
 	Restart RestartSpec `mapstructure:"restart"`
 }
 
@@ -221,13 +221,13 @@ type RestartSpec struct {
 
 // ResolvedMode returns the effective mode after applying precedence rules:
 // an explicit Deployments list is treated as a list, otherwise the Mode (empty
-// => references).
+// => none, i.e. sync only / no restart).
 func (r RestartSpec) ResolvedMode() string {
 	if len(r.Deployments) > 0 {
 		return "list"
 	}
 	if r.Mode == "" {
-		return RestartModeReferences
+		return RestartModeNone
 	}
 	return r.Mode
 }
@@ -237,7 +237,6 @@ func (r RestartSpec) ResolvedMode() string {
 type SecretSyncConfig struct {
 	Enabled     bool             `mapstructure:"enabled"`
 	IntervalSec int              `mapstructure:"interval_sec"`
-	AutoRestart bool             `mapstructure:"auto_restart"`
 	OpenBao     OpenBaoConfig    `mapstructure:"openbao"`
 	Items       []SecretSyncItem `mapstructure:"items"`
 }
@@ -344,7 +343,6 @@ func Load(configFile string) (*Config, error) {
 	v.SetDefault("auth.ldap.timeout_sec", 10)
 	v.SetDefault("secret_sync.enabled", false)
 	v.SetDefault("secret_sync.interval_sec", 300)
-	v.SetDefault("secret_sync.auto_restart", false)
 	v.SetDefault("secret_sync.openbao.kv_mount", "kv")
 	v.SetDefault("secret_sync.openbao.auth_mount", "kubernetes")
 	v.SetDefault("secret_sync.openbao.role", "vault-app-role")
@@ -375,7 +373,7 @@ func Load(configFile string) (*Config, error) {
 		"auth.ldap.bind_dn", "auth.ldap.bind_password", "auth.ldap.base_dn",
 		"auth.ldap.user_filter", "auth.ldap.timeout_sec",
 		"ha.self_cluster_id", "ha.default_peer_cluster_id", "ha.auto_all",
-		"secret_sync.enabled", "secret_sync.interval_sec", "secret_sync.auto_restart",
+		"secret_sync.enabled", "secret_sync.interval_sec",
 		"secret_sync.openbao.addr", "secret_sync.openbao.namespace", "secret_sync.openbao.kv_mount",
 		"secret_sync.openbao.auth_mount", "secret_sync.openbao.role", "secret_sync.openbao.token",
 		"secret_sync.openbao.cacert",
