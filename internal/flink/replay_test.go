@@ -3,6 +3,7 @@ package flink
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,19 @@ func (f *replayFake) PatchFlinkDeployment(_ context.Context, _ string, patch []b
 	return nil
 }
 func (f *replayFake) CountPods(_ context.Context, _ string) (int, error) { return 0, nil }
+
+func (f *replayFake) Exec(_ context.Context, _, _ string, cmd []string) (*cluster.ExecResult, error) {
+	var url string
+	for _, a := range cmd {
+		if strings.Contains(a, "/savepoints") {
+			url = a
+		}
+	}
+	if strings.HasSuffix(url, "/savepoints") { // trigger
+		return &cluster.ExecResult{Stdout: `{"request-id":"r1"}`}, nil
+	}
+	return &cluster.ExecResult{Stdout: `{"status":{"id":"COMPLETED"},"operation":{"location":"s3://bucket/savepoints/job1/savepoint-abc"}}`}, nil
+}
 
 func (f *replayFake) GetConfigMap(_ context.Context, name string) (map[string]string, bool, error) {
 	d, ok := f.cms[name]
@@ -85,14 +99,19 @@ func newReplayFixture() (*Service, *replayFake) {
 				map[string]any{"name": "sql-scripts", "configMap": map[string]any{"name": "flink-sql-job1"}},
 			}}},
 		},
+		"status": map[string]any{
+			"jobStatus":      map[string]any{"state": "RUNNING", "jobId": "jid-123"},
+			"lifecycleState": "STABLE",
+		},
 	}}
 	f := &replayFake{cr: cr, cms: map[string]map[string]string{
 		"flink-sql-job1": {"job.sql": kafkaSourceSQL},
 	}}
 	cfg := &config.Config{
-		DeploymentPrefix: "flink-sql-job-",
-		StopTimeoutSec:   2,
-		Replay:           config.ReplayConfig{Enabled: true, SQLVolumeName: "sql-scripts", SQLFileKey: "job.sql"},
+		DeploymentPrefix:    "flink-sql-job-",
+		StopTimeoutSec:      2,
+		SavepointTimeoutSec: 30,
+		Replay:              config.ReplayConfig{Enabled: true, SQLVolumeName: "sql-scripts", SQLFileKey: "job.sql"},
 	}
 	return NewService(f, cfg), f
 }
@@ -158,6 +177,12 @@ func TestReplayThenRevertRoundTrip(t *testing.T) {
 	if mode := nestedStr(f.cr, "spec", "job", "upgradeMode"); mode != "last-state" {
 		t.Errorf("upgradeMode = %q, want last-state after revert", mode)
 	}
+	if sp := nestedStr(f.cr, "spec", "job", "initialSavepointPath"); sp == "" {
+		t.Error("revert should redeploy from a savepoint (initialSavepointPath set)")
+	}
+	if rev.Result == "" {
+		t.Error("revert op should surface the recovery savepoint path in Result")
+	}
 	if f.cr.GetAnnotations()[annReplayActive] == "true" {
 		t.Error("replay-active annotation should be cleared after revert")
 	}
@@ -198,4 +223,28 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func TestRevertRefusesWhenJobUnhealthyAndKeepsSession(t *testing.T) {
+	svc, f := newReplayFixture()
+
+	// Start a replay so a session/backup exists.
+	if op := waitOp(t, svc, svc.StartReplay("job1", "", 1730000000000, "earliest", "tester").ID); op.Status != OpSucceeded {
+		t.Fatalf("replay failed: %s", op.Error)
+	}
+	// Make the job unhealthy (e.g. failing) so a savepoint cannot be taken.
+	unstructured.SetNestedField(f.cr.Object, "FAILING", "status", "jobStatus", "state")
+	unstructured.SetNestedField(f.cr.Object, "", "status", "lifecycleState")
+
+	rev := waitOp(t, svc, svc.StartRevert("job1", "tester").ID)
+	if rev.Status != OpFailed {
+		t.Fatalf("revert should fail preflight when job is unhealthy, got %s", rev.Status)
+	}
+	// The replay session MUST be kept so the operator can retry / recover.
+	if _, ok := f.cms["flink-sql-job1"]["job.sql.flinkui-prereplay-backup"]; !ok {
+		t.Error("backup key must be kept when revert fails preflight")
+	}
+	if f.cr.GetAnnotations()[annReplayActive] != "true" {
+		t.Error("replay-active annotation must be kept when revert fails preflight")
+	}
 }

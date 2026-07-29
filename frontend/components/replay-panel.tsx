@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ReplayDialog } from "@/components/replay-dialog";
+import { PlanSteps } from "@/components/plan-steps";
 
 interface ReplayPanelProps {
   jobName: string;
@@ -26,6 +27,7 @@ export function ReplayPanel({ jobName, cluster }: ReplayPanelProps) {
   const [confirmRevert, setConfirmRevert] = React.useState(false);
   const [reverting, setReverting] = React.useState(false);
   const [progress, setProgress] = React.useState("");
+  const [savepoint, setSavepoint] = React.useState("");
 
   const session = useQuery({
     queryKey: ["replay-session", jobName],
@@ -47,8 +49,10 @@ export function ReplayPanel({ jobName, cluster }: ReplayPanelProps) {
       const op = await api.revertReplay(jobName);
       const final = await pollOperation(op.id, (o) => setProgress(o.progress));
       if (final.status === "succeeded") {
+        if (final.result) setSavepoint(final.result);
         toast({ title: "Reverted", description: final.progress, variant: "success" });
       } else {
+        if (final.result) setSavepoint(final.result);
         toast({ title: "Revert failed", description: final.error || final.progress, variant: "error" });
       }
       await qc.invalidateQueries({ queryKey: ["job", jobName] });
@@ -89,6 +93,16 @@ export function ReplayPanel({ jobName, cluster }: ReplayPanelProps) {
             </div>
           </div>
           {s?.verdictDetail && <p className="mt-2 text-xs text-muted-foreground">{s.verdictDetail}</p>}
+          {savepoint && (
+            <p className="mt-2 break-all text-xs">
+              Recovery savepoint:{" "}
+              <span className="font-mono">{savepoint}</span> — if anything fails you can redeploy
+              from this path.
+            </p>
+          )}
+          <div className="mt-2">
+            <PlanSteps steps={s?.revertSteps} title="What Revert will do" />
+          </div>
         </div>
       ) : (
         <Button variant="outline" size="sm" onClick={() => setOpen(true)}>

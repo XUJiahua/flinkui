@@ -36,7 +36,12 @@ func (s *Service) Savepoint(ctx context.Context, name string) (*SavepointResult,
 	l := s.lockFor(dep)
 	l.Lock()
 	defer l.Unlock()
+	return s.savepointInLock(ctx, dep)
+}
 
+// savepointInLock triggers + polls a savepoint assuming the caller already holds
+// the per-deployment lock (used by replay revert, which runs under the lock).
+func (s *Service) savepointInLock(ctx context.Context, dep string) (*SavepointResult, error) {
 	u, err := s.acc.GetFlinkDeployment(ctx, dep)
 	if err != nil {
 		return nil, err
@@ -91,27 +96,23 @@ func (s *Service) Savepoint(ctx context.Context, name string) (*SavepointResult,
 		fmt.Sprintf("http://localhost:8081/jobs/%s/savepoints/%s", jid, tr.RequestID),
 	}
 	for time.Now().Before(deadline) {
+		// Check first (so a fast savepoint is detected immediately), then wait.
+		if sres, err := s.acc.Exec(ctx, selector, "flink-main-container", statusCmd); err == nil {
+			var st savepointStatusResp
+			if json.Unmarshal([]byte(sres.Stdout), &st) == nil && st.Status.ID == "COMPLETED" {
+				if st.Operation.Location != "" {
+					return &SavepointResult{Location: st.Operation.Location}, nil
+				}
+				if st.Operation.FailureCause.Class != "" {
+					return nil, fmt.Errorf("savepoint failed: %s", st.Operation.FailureCause.Class)
+				}
+				return nil, fmt.Errorf("savepoint COMPLETED but no location")
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(5 * time.Second):
-		}
-		sres, err := s.acc.Exec(ctx, selector, "flink-main-container", statusCmd)
-		if err != nil {
-			continue
-		}
-		var st savepointStatusResp
-		if err := json.Unmarshal([]byte(sres.Stdout), &st); err != nil {
-			continue
-		}
-		if st.Status.ID == "COMPLETED" {
-			if st.Operation.Location != "" {
-				return &SavepointResult{Location: st.Operation.Location}, nil
-			}
-			if st.Operation.FailureCause.Class != "" {
-				return nil, fmt.Errorf("savepoint failed: %s", st.Operation.FailureCause.Class)
-			}
-			return nil, fmt.Errorf("savepoint COMPLETED but no location")
 		}
 	}
 	return nil, fmt.Errorf("savepoint did not complete within %ds", s.cfg.SavepointTimeoutSec)
