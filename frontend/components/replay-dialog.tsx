@@ -203,32 +203,116 @@ export function ReplayDialog({ open, jobName, cluster, onClose }: ReplayDialogPr
   );
 }
 
-/** SqlDiff renders a minimal line-level diff highlighting added/removed lines. */
+type DiffKind = "equal" | "del" | "add" | "mod";
+interface DiffRow {
+  left?: string;
+  right?: string;
+  kind: DiffKind;
+}
+
+// diffRows computes a line-level, LCS-aligned diff so unchanged lines stay on
+// the same row on both sides and edits line up as replacements.
+function diffRows(a: string[], b: string[]): DiffRow[] {
+  const n = a.length;
+  const m = b.length;
+  // LCS length table.
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const ops: { t: "eq" | "del" | "add"; l?: string; r?: string }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ t: "eq", l: a[i], r: b[j] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ t: "del", l: a[i] });
+      i++;
+    } else {
+      ops.push({ t: "add", r: b[j] });
+      j++;
+    }
+  }
+  while (i < n) ops.push({ t: "del", l: a[i++] });
+  while (j < m) ops.push({ t: "add", r: b[j++] });
+
+  // Coalesce runs of del/add so replacements pair up side by side.
+  const rows: DiffRow[] = [];
+  let k = 0;
+  while (k < ops.length) {
+    if (ops[k].t === "eq") {
+      rows.push({ left: ops[k].l, right: ops[k].r, kind: "equal" });
+      k++;
+      continue;
+    }
+    const dels: string[] = [];
+    const adds: string[] = [];
+    while (k < ops.length && ops[k].t !== "eq") {
+      if (ops[k].t === "del") dels.push(ops[k].l as string);
+      else adds.push(ops[k].r as string);
+      k++;
+    }
+    const max = Math.max(dels.length, adds.length);
+    for (let x = 0; x < max; x++) {
+      const l = dels[x];
+      const r = adds[x];
+      if (l !== undefined && r !== undefined) rows.push({ left: l, right: r, kind: "mod" });
+      else if (l !== undefined) rows.push({ left: l, kind: "del" });
+      else rows.push({ right: r, kind: "add" });
+    }
+  }
+  return rows;
+}
+
+/** SqlDiff renders a side-by-side (before | after) line diff. Removed/changed
+ *  lines are highlighted on the left, added/changed on the right, aligned by an
+ *  LCS so unchanged context stays level. */
 function SqlDiff({ original, next }: { original: string; next: string }) {
-  const oldLines = new Set(original.split("\n"));
-  const newLines = new Set(next.split("\n"));
-  const rows = next.split("\n").map((line, i) => {
-    const added = !oldLines.has(line);
-    return (
-      <div key={`n${i}`} className={added ? "bg-green-500/15" : ""}>
-        <span className="select-none text-muted-foreground">{added ? "+ " : "  "}</span>
-        {line}
-      </div>
-    );
-  });
-  const removed = original
-    .split("\n")
-    .filter((line) => !newLines.has(line))
-    .map((line, i) => (
-      <div key={`o${i}`} className="bg-red-500/15">
-        <span className="select-none text-muted-foreground">- </span>
-        {line}
-      </div>
-    ));
+  const rows = React.useMemo(() => diffRows(original.split("\n"), next.split("\n")), [original, next]);
+  const cell = "whitespace-pre-wrap break-all px-2 py-0.5";
   return (
-    <div className="max-h-72 overflow-auto rounded-md border bg-muted/30 p-3 font-mono text-xs leading-relaxed">
-      {removed}
-      {rows}
+    <div className="overflow-hidden rounded-md border font-mono text-xs">
+      <div className="grid grid-cols-2 border-b bg-muted/50 font-sans text-[11px] font-medium text-muted-foreground">
+        <div className="border-r px-2 py-1">Before</div>
+        <div className="px-2 py-1">After</div>
+      </div>
+      <div className="grid max-h-80 grid-cols-2 overflow-auto leading-relaxed">
+        {rows.map((row, idx) => {
+          const leftBg = row.kind === "del" || row.kind === "mod" ? "bg-red-500/15" : "";
+          const rightBg = row.kind === "add" || row.kind === "mod" ? "bg-green-500/15" : "";
+          const leftEmpty = row.left === undefined;
+          const rightEmpty = row.right === undefined;
+          return (
+            <React.Fragment key={idx}>
+              <div className={`border-r ${cell} ${leftBg} ${leftEmpty ? "bg-muted/20" : ""}`}>
+                {!leftEmpty && (
+                  <>
+                    <span className="select-none text-muted-foreground">
+                      {row.kind === "del" || row.kind === "mod" ? "- " : "  "}
+                    </span>
+                    {row.left}
+                  </>
+                )}
+              </div>
+              <div className={`${cell} ${rightBg} ${rightEmpty ? "bg-muted/20" : ""}`}>
+                {!rightEmpty && (
+                  <>
+                    <span className="select-none text-muted-foreground">
+                      {row.kind === "add" || row.kind === "mod" ? "+ " : "  "}
+                    </span>
+                    {row.right}
+                  </>
+                )}
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
     </div>
   );
 }
