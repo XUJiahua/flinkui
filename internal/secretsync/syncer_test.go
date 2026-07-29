@@ -17,11 +17,12 @@ import (
 
 // fakeAccessor implements the secretsync.Accessor interface in memory.
 type fakeAccessor struct {
-	mu          sync.Mutex
-	secrets     map[string]map[string][]byte
-	annotations map[string]string // deployment -> hash annotation
-	restarts    map[string]int    // deployment -> restart (patch) count
-	deployments []unstructured.Unstructured
+	mu           sync.Mutex
+	secrets      map[string]map[string][]byte
+	annotations  map[string]string // deployment -> hash annotation
+	restarts     map[string]int    // deployment -> restart (patch) count
+	deployments  []unstructured.Unstructured
+	replayActive map[string]bool // deployment -> has an active replay session
 }
 
 func newFakeAccessor() *fakeAccessor {
@@ -39,8 +40,15 @@ func (f *fakeAccessor) GetFlinkDeployment(_ context.Context, name string) (*unst
 	defer f.mu.Unlock()
 	u := &unstructured.Unstructured{Object: map[string]any{}}
 	u.SetName(name)
+	ann := map[string]string{}
 	if h := f.annotations[name]; h != "" {
-		u.SetAnnotations(map[string]string{hashAnnotation: h})
+		ann[hashAnnotation] = h
+	}
+	if f.replayActive[name] {
+		ann[replayActiveAnnotation] = "true"
+	}
+	if len(ann) > 0 {
+		u.SetAnnotations(ann)
 	}
 	return u, nil
 }
@@ -215,5 +223,41 @@ func TestRestartGuard(t *testing.T) {
 	syncer.syncOnce(context.Background())
 	if acc.restarts[dep] != 1 {
 		t.Fatalf("allowed: expected 1 restart, got %d", acc.restarts[dep])
+	}
+}
+
+// TestReplayInterlockSkipsRestart proves secret-sync does not restart a job that
+// has an active replay-from-timestamp session, but still keeps retrying (hash not
+// advanced) so it restarts once the replay session clears.
+func TestReplayInterlockSkipsRestart(t *testing.T) {
+	kv := map[string]map[string]string{"p/env": {"K": "v1"}}
+	srv := fakeBaoServer(t, kv)
+	defer srv.Close()
+
+	dep := "job-a"
+	acc := newFakeAccessor()
+	acc.replayActive = map[string]bool{dep: true}
+	cfg := config.SecretSyncConfig{
+		Enabled: true,
+		OpenBao: config.OpenBaoConfig{Addr: srv.URL, KVMount: "kv", Token: "t"},
+		Items:   []config.SecretSyncItem{{SecretName: "env", KVPath: "p/env", Restart: config.RestartSpec{Deployments: []string{dep}}}},
+	}
+	syncer, _ := New(acc, cfg)
+
+	// Replay active: value is "new" but the restart must be skipped, and the
+	// Secret must still be synced.
+	syncer.syncOnce(context.Background())
+	if acc.restarts[dep] != 0 {
+		t.Fatalf("restart must be skipped during replay, got %d", acc.restarts[dep])
+	}
+	if got := acc.secrets["env"]["K"]; string(got) != "v1" {
+		t.Errorf("secret should still be synced during replay, got %q", got)
+	}
+
+	// Replay ends: the same (still-changed) value now triggers a restart.
+	acc.replayActive[dep] = false
+	syncer.syncOnce(context.Background())
+	if acc.restarts[dep] != 1 {
+		t.Fatalf("restart should proceed once replay clears, got %d", acc.restarts[dep])
 	}
 }

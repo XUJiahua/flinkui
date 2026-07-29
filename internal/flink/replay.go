@@ -339,7 +339,19 @@ func (s *Service) runReplay(ctx context.Context, opID, name, dep, sourceTable st
 			return fmt.Errorf("backup SQL: %w", err)
 		}
 	}
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, annotationsPatch(map[string]any{
+	// Write the new SQL to the ConfigMap first (a different object; no CR write).
+	s.setProgress(opID, "writing replay SQL")
+	if err := ca.PatchConfigMapKey(ctx, cmName, s.cfg.Replay.SQLFileKey, newSQL); err != nil {
+		return fmt.Errorf("write SQL: %w", err)
+	}
+	// Then ONE FlinkDeployment write: set the replay-session annotations +
+	// upgradeMode=stateless + sql-checksum together. A single spec change makes
+	// the operator perform one stateless upgrade (cancel discarding state, then
+	// redeploy fresh so new pods remount the ConfigMap and load the new SQL); a
+	// single write means nothing of ours collides with that reconcile. We do NOT
+	// suspend/resume ourselves — that would be a redundant restart.
+	s.setProgress(opID, "setting upgradeMode=stateless (operator will redeploy)")
+	if err := s.acc.PatchFlinkDeployment(ctx, dep, replayForwardPatch(newSQL, map[string]any{
 		annReplayActive:   "true",
 		annReplayFrom:     strconv.FormatInt(fromMillis, 10),
 		annReplayStartAt:  time.Now().UTC().Format(time.RFC3339),
@@ -347,26 +359,7 @@ func (s *Service) runReplay(ctx context.Context, opID, name, dep, sourceTable st
 		annReplayTable:    table,
 		annReplayPrevMode: prevMode,
 	})); err != nil {
-		return fmt.Errorf("annotate replay session: %w", err)
-	}
-
-	// Edit the SQL, then in ONE spec patch flip to stateless AND bump the
-	// sql-checksum. Doing both in a single patch means the operator reconciles
-	// once (one UPGRADE with a coherent diff) instead of twice, and never starts
-	// a transient last-state upgrade of the new SQL before stateless takes effect.
-	s.setProgress(opID, "writing replay SQL")
-	if err := ca.PatchConfigMapKey(ctx, cmName, s.cfg.Replay.SQLFileKey, newSQL); err != nil {
-		return fmt.Errorf("write SQL: %w", err)
-	}
-	// This single spec change (upgradeMode=stateless + flinkConfiguration diff)
-	// makes the operator perform ONE stateless upgrade — cancel the job discarding
-	// state, then redeploy fresh (new pods remount the ConfigMap and load the new
-	// SQL). We deliberately do NOT also suspend/resume ourselves: that explicit
-	// restart is redundant and makes the operator re-detect the same pending diff
-	// on resume, emitting a duplicate "UPGRADE change(s) detected".
-	s.setProgress(opID, "setting upgradeMode=stateless (operator will redeploy)")
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, replayStatelessPatch(newSQL)); err != nil {
-		return fmt.Errorf("set stateless + checksum: %w", err)
+		return fmt.Errorf("apply replay (annotations + stateless + checksum): %w", err)
 	}
 	s.succeedOp(opID, table, fmt.Sprintf("replaying %q from %d (stateless); operator is redeploying — verify via logs (Seeking to offset)", table, fromMillis))
 	return nil
@@ -491,12 +484,16 @@ func sqlChecksum(sql string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// replayStatelessPatch flips the job to stateless AND bumps the sql-checksum in a
-// SINGLE spec patch, so the operator sees one coherent diff (upgradeMode +
-// checksum) and reconciles once — never a transient last-state upgrade of the
-// new SQL first.
-func replayStatelessPatch(sql string) []byte {
+// replayForwardPatch sets the replay-session annotations AND flips the job to
+// stateless AND bumps the sql-checksum in a SINGLE patch. One patch means:
+//   - the operator sees one coherent spec diff (upgradeMode + checksum) and
+//     reconciles once — never a transient last-state upgrade of the new SQL;
+//   - flinkui does exactly one FlinkDeployment write for the whole forward
+//     replay, so there is no second write to collide with the operator's
+//     reconcile ("Status have been modified externally").
+func replayForwardPatch(sql string, anns map[string]any) []byte {
 	b, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{"annotations": anns},
 		"spec": map[string]any{
 			"job":                map[string]any{"upgradeMode": "stateless"},
 			"flinkConfiguration": map[string]any{sqlChecksumKey: sqlChecksum(sql)},
@@ -538,13 +535,4 @@ func clearReplayAnnotations() map[string]any {
 		annReplayTable:    nil,
 		annReplayPrevMode: nil,
 	}
-}
-
-// annotationsPatch builds a merge patch on metadata.annotations. A nil value
-// deletes that annotation (JSON null in a merge patch).
-func annotationsPatch(anns map[string]any) []byte {
-	b, _ := json.Marshal(map[string]any{
-		"metadata": map[string]any{"annotations": anns},
-	})
-	return b
 }

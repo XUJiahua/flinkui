@@ -165,6 +165,10 @@ can also be supplied with `-config path.yaml`.
 > - `restart.mode: all` ⇒ restart every FlinkDeployment in the namespace;
 > - `restart.deployments: [a, b]` ⇒ an explicit list (mutually exclusive with `mode`).
 >
+> Secret-sync never restarts a job while a replay-from-timestamp session is
+> active on it (annotation `flinkui.io/replay-active`): the Secret is still
+> synced, but the restart is deferred and retried once the replay ends.
+>
 > ```yaml
 > secret_sync:
 >   enabled: true
