@@ -21,6 +21,12 @@ import (
 // the loop only restarts when the synced values actually change.
 const hashAnnotation = "flinkui.fko-demo.io/openbao-value-hash"
 
+// replayActiveAnnotation marks a FlinkDeployment as having an in-progress
+// replay-from-timestamp session. Secret-sync must NOT restart such a job — that
+// would fight the replay's own spec changes and race the operator's reconcile.
+// MUST match internal/flink.annReplayActive.
+const replayActiveAnnotation = "flinkui.io/replay-active"
+
 // Accessor is the subset of cluster capabilities the syncer needs: read/write
 // Secrets, and read/patch FlinkDeployments (to bump restartNonce). KubeAccessor
 // satisfies this (ClusterAccessor + SecretAccessor).
@@ -292,6 +298,17 @@ func (s *Syncer) maybeRestart(ctx context.Context, dep, h string) error {
 	}
 	if u.GetAnnotations()[hashAnnotation] == h {
 		return nil // unchanged; no restart
+	}
+	// Replay interlock: never restart a job mid replay-from-timestamp. Skip
+	// without updating the hash so the restart is retried once replay ends. The
+	// Secret was already synced in phase 1; the replay redeploy loads it.
+	if u.GetAnnotations()[replayActiveAnnotation] == "true" {
+		reason := "replay in progress; restart deferred"
+		s.mu.Lock()
+		s.skipped[dep] = reason
+		s.mu.Unlock()
+		log.Printf("secretsync: %s: restart skipped (%s)", dep, reason)
+		return nil
 	}
 	// HA interlock: skip (do NOT update the hash annotation) when a guard vetoes,
 	// so the restart is retried on a later cycle once it becomes safe. The Secret

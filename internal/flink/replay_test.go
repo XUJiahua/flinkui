@@ -249,20 +249,23 @@ func TestRevertRefusesWhenJobUnhealthyAndKeepsSession(t *testing.T) {
 	}
 }
 
-func TestReplayStatelessPatchIsSingleCoherentDiff(t *testing.T) {
+func TestReplayForwardPatchIsSingleWrite(t *testing.T) {
 	var p map[string]any
-	if err := json.Unmarshal(replayStatelessPatch("SELECT 1"), &p); err != nil {
+	anns := map[string]any{annReplayActive: "true", annReplayPrevMode: "last-state"}
+	if err := json.Unmarshal(replayForwardPatch("SELECT 1", anns), &p); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	spec := p["spec"].(map[string]any)
-	// One patch must carry BOTH the upgradeMode flip and the checksum, so the
-	// operator reconciles once (not once for checksum, then again for the mode).
+	// One patch must carry the upgradeMode flip, the checksum AND the session
+	// annotations, so the whole forward replay is a single FlinkDeployment write.
 	if spec["job"].(map[string]any)["upgradeMode"] != "stateless" {
 		t.Error("patch missing upgradeMode=stateless")
 	}
-	fc := spec["flinkConfiguration"].(map[string]any)
-	if fc[sqlChecksumKey] != sqlChecksum("SELECT 1") {
+	if spec["flinkConfiguration"].(map[string]any)[sqlChecksumKey] != sqlChecksum("SELECT 1") {
 		t.Error("patch missing/incorrect sql-checksum")
+	}
+	if p["metadata"].(map[string]any)["annotations"].(map[string]any)[annReplayActive] != "true" {
+		t.Error("patch missing replay-active annotation")
 	}
 }
 
