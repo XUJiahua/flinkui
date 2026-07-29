@@ -457,22 +457,16 @@ func (s *Service) runRevert(ctx context.Context, opID, name, dep string) error {
 	//    returning to the previous upgradeMode and refreshing the sql-checksum in
 	//    the SAME patch so the operator reconciles once (not twice). This mirrors
 	//    Rollback and avoids the fragile stateless->last-state suspend/resume.
+	// The redeploy patch ALSO clears the replay-session annotations, so revert is
+	// a single FlinkDeployment write (no second write to collide with the
+	// operator's redeploy reconcile). The backup key lives in the ConfigMap (a
+	// different object), so removing it does not touch the FlinkDeployment.
 	s.setProgress(opID, fmt.Sprintf("redeploying from savepoint (upgradeMode=%s)", prevMode))
-	if err := s.acc.PatchFlinkDeployment(ctx, dep, redeployFromSavepointPatch(prevMode, sp.Location, backupSQL)); err != nil {
+	if err := s.acc.PatchFlinkDeployment(ctx, dep, revertRedeployPatch(prevMode, sp.Location, backupSQL)); err != nil {
 		return fmt.Errorf("redeploy from savepoint %s failed: %w", sp.Location, err)
 	}
-
-	// 4. Only after a successful redeploy do we clear the backup + annotations.
-	s.setProgress(opID, "clearing replay session")
+	s.setProgress(opID, "clearing SQL backup")
 	_ = ca.DeleteConfigMapKey(ctx, cmName, backupKey)
-	_ = s.acc.PatchFlinkDeployment(ctx, dep, annotationsPatch(map[string]any{
-		annReplayActive:   nil,
-		annReplayFrom:     nil,
-		annReplayStartAt:  nil,
-		annReplayStartBy:  nil,
-		annReplayTable:    nil,
-		annReplayPrevMode: nil,
-	}))
 	s.succeedOp(opID, sp.Location, fmt.Sprintf("reverted to %s; redeployed from savepoint %s", prevMode, sp.Location))
 	return nil
 }
@@ -511,12 +505,15 @@ func replayStatelessPatch(sql string) []byte {
 	return b
 }
 
-// redeployFromSavepointPatch forces a redeploy that restores state from path,
-// returns the job to the given upgradeMode, and refreshes the sql-checksum — all
-// in one spec patch (a single reconcile). The changing savepointRedeployNonce is
-// what triggers the operator to redeploy from initialSavepointPath.
-func redeployFromSavepointPatch(mode, path, sql string) []byte {
+// revertRedeployPatch redeploys from the savepoint (restore state from path,
+// return to upgradeMode, refresh the sql-checksum) AND clears the replay-session
+// annotations — all in ONE patch. Combining them means revert performs a single
+// FlinkDeployment write: there is no second write to land during the operator's
+// redeploy reconcile and trip its optimistic lock ("Status have been modified
+// externally"). The changing savepointRedeployNonce triggers the redeploy.
+func revertRedeployPatch(mode, path, sql string) []byte {
 	b, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{"annotations": clearReplayAnnotations()},
 		"spec": map[string]any{
 			"job": map[string]any{
 				"state":                  "running",
@@ -528,6 +525,19 @@ func redeployFromSavepointPatch(mode, path, sql string) []byte {
 		},
 	})
 	return b
+}
+
+// clearReplayAnnotations returns a metadata.annotations merge-patch map that
+// deletes every replay-session annotation (nil => remove in a merge patch).
+func clearReplayAnnotations() map[string]any {
+	return map[string]any{
+		annReplayActive:   nil,
+		annReplayFrom:     nil,
+		annReplayStartAt:  nil,
+		annReplayStartBy:  nil,
+		annReplayTable:    nil,
+		annReplayPrevMode: nil,
+	}
 }
 
 // annotationsPatch builds a merge patch on metadata.annotations. A nil value
