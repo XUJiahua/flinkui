@@ -266,9 +266,9 @@ func TestReplayStatelessPatchIsSingleCoherentDiff(t *testing.T) {
 	}
 }
 
-func TestRedeployFromSavepointPatchFoldsChecksum(t *testing.T) {
+func TestRevertRedeployPatchIsSingleWrite(t *testing.T) {
 	var p map[string]any
-	if err := json.Unmarshal(redeployFromSavepointPatch("last-state", "s3://b/sp-1", "SELECT 2"), &p); err != nil {
+	if err := json.Unmarshal(revertRedeployPatch("last-state", "s3://b/sp-1", "SELECT 2"), &p); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	job := p["spec"].(map[string]any)["job"].(map[string]any)
@@ -278,5 +278,13 @@ func TestRedeployFromSavepointPatchFoldsChecksum(t *testing.T) {
 	fc := p["spec"].(map[string]any)["flinkConfiguration"].(map[string]any)
 	if fc[sqlChecksumKey] != sqlChecksum("SELECT 2") {
 		t.Error("redeploy patch should fold in the sql-checksum (single reconcile)")
+	}
+	// The SAME patch must clear the replay annotations, so revert is one CR write
+	// (no second write to collide with the operator's redeploy reconcile).
+	ann := p["metadata"].(map[string]any)["annotations"].(map[string]any)
+	for _, k := range []string{annReplayActive, annReplayPrevMode, annReplayFrom} {
+		if v, ok := ann[k]; !ok || v != nil {
+			t.Errorf("annotation %s should be cleared (nil) in the same patch, got %v (present=%v)", k, v, ok)
+		}
 	}
 }
