@@ -58,8 +58,9 @@ export default function SecretSyncPage() {
               )}
             </h1>
             <p className="text-sm text-muted-foreground">
-              Keeps the flink-* Secrets in sync from OpenBao/Vault (no ESO). When a value changes and
-              auto-restart is on, the affected FlinkDeployment is restarted (last-state) to load it.
+              Keeps the flink-* Secrets in sync from OpenBao/Vault (no ESO). When a value changes,
+              each item&apos;s restart policy (references / all / list) restarts the selected
+              FlinkDeployment(s) in last-state to load it.
             </p>
           </div>
           {s?.enabled && (
@@ -91,10 +92,7 @@ export default function SecretSyncPage() {
                   <ShieldCheck className="h-4 w-4" /> Status
                 </CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-                <Field label="Auto-restart">
-                  {s.autoRestart ? <Badge>on</Badge> : <Badge variant="secondary">off</Badge>}
-                </Field>
+              <CardContent className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
                 <Field label="Interval">{s.intervalSec ? `${s.intervalSec}s` : "—"}</Field>
                 <Field label="Last sync">
                   {s.lastSyncUnix ? new Date(s.lastSyncUnix * 1000).toLocaleString() : "never"}
@@ -113,7 +111,7 @@ export default function SecretSyncPage() {
                     <tr className="border-b">
                       <th className="py-2 font-medium">Secret</th>
                       <th className="py-2 font-medium">KV path</th>
-                      <th className="py-2 font-medium">Restart target</th>
+                      <th className="py-2 font-medium">Restart</th>
                       <th className="py-2 font-medium">Keys</th>
                       <th className="py-2 font-medium">Last result</th>
                     </tr>
@@ -123,7 +121,20 @@ export default function SecretSyncPage() {
                       <tr key={it.secretName} className="border-b last:border-0">
                         <td className="py-2 font-medium">{it.secretName}</td>
                         <td className="py-2 font-mono text-xs text-muted-foreground">{it.kvPath}</td>
-                        <td className="py-2 text-xs">{it.restartDeployment || "—"}</td>
+                        <td className="py-2 text-xs">
+                          {it.restartMode && it.restartMode !== "none" ? (
+                            <div className="space-y-0.5">
+                              <Badge variant="secondary">{it.restartMode}</Badge>
+                              {it.restartDeployments && it.restartDeployments.length > 0 && (
+                                <div className="font-mono text-muted-foreground">
+                                  {it.restartDeployments.join(", ")}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                         <td className="py-2">{it.keys}</td>
                         <td className="py-2">
                           {it.ok ? (

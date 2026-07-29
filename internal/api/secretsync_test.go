@@ -77,7 +77,7 @@ func TestSecretSyncEnabled(t *testing.T) {
 	defer bao.Close()
 
 	cfg := config.SecretSyncConfig{
-		Enabled: true, AutoRestart: false,
+		Enabled: true,
 		OpenBao: config.OpenBaoConfig{Addr: bao.URL, KVMount: "kv", Token: "t"},
 		Items:   []config.SecretSyncItem{{SecretName: "flink-s3-credentials", KVPath: "config/x/s3"}},
 	}

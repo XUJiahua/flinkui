@@ -184,15 +184,52 @@ type OpenBaoConfig struct {
 	CACert string `mapstructure:"cacert"`
 }
 
-// SecretSyncItem maps one Vault KV path to one Kubernetes Secret, and optionally
-// names a FlinkDeployment to restart when the synced values change.
+// SecretSyncItem maps one Vault KV path to one Kubernetes Secret and declares
+// which FlinkDeployment(s) to restart when the synced values change.
 type SecretSyncItem struct {
 	// SecretName is the target K8s Secret (e.g. flink-s3-credentials).
 	SecretName string `mapstructure:"secret_name"`
 	// KVPath is the KV v2 path under the mount (e.g. config/cil/flink/vault-a/s3).
 	KVPath string `mapstructure:"kv_path"`
-	// RestartDeployment is the FlinkDeployment to restart on change (empty => none).
-	RestartDeployment string `mapstructure:"restart_deployment"`
+	// Restart selects which deployments to restart on change. When omitted it
+	// defaults to "none" (sync the Secret only). Set restart.mode to
+	// references|all or restart.deployments to an explicit list to opt in.
+	Restart RestartSpec `mapstructure:"restart"`
+}
+
+// Restart modes for a SecretSyncItem.
+const (
+	// RestartModeReferences restarts only FlinkDeployments whose podTemplate
+	// references the Secret (envFrom/secretKeyRef/volume). This is the default.
+	RestartModeReferences = "references"
+	// RestartModeAll restarts every FlinkDeployment in the namespace.
+	RestartModeAll = "all"
+	// RestartModeNone never restarts (sync the Secret only).
+	RestartModeNone = "none"
+)
+
+// RestartSpec selects which FlinkDeployments a secret change should restart.
+// Precedence: a non-empty Deployments list wins; otherwise Mode applies, with an
+// empty Mode meaning "references".
+type RestartSpec struct {
+	// Mode is one of references (default) | all | none. Ignored when Deployments
+	// is set.
+	Mode string `mapstructure:"mode"`
+	// Deployments is an explicit list of FlinkDeployment names to restart.
+	Deployments []string `mapstructure:"deployments"`
+}
+
+// ResolvedMode returns the effective mode after applying precedence rules:
+// an explicit Deployments list is treated as a list, otherwise the Mode (empty
+// => none, i.e. sync only / no restart).
+func (r RestartSpec) ResolvedMode() string {
+	if len(r.Deployments) > 0 {
+		return "list"
+	}
+	if r.Mode == "" {
+		return RestartModeNone
+	}
+	return r.Mode
 }
 
 // SecretSyncConfig configures the in-process OpenBao->Secret sync loop
@@ -200,7 +237,6 @@ type SecretSyncItem struct {
 type SecretSyncConfig struct {
 	Enabled     bool             `mapstructure:"enabled"`
 	IntervalSec int              `mapstructure:"interval_sec"`
-	AutoRestart bool             `mapstructure:"auto_restart"`
 	OpenBao     OpenBaoConfig    `mapstructure:"openbao"`
 	Items       []SecretSyncItem `mapstructure:"items"`
 }
@@ -265,6 +301,26 @@ type Config struct {
 	Replay ReplayConfig `mapstructure:"replay"`
 }
 
+// validateRestartSpecs checks each secret_sync item's restart spec: mode must be
+// one of references|all|none (empty => references), and mode + deployments must
+// not both be set.
+func validateRestartSpecs(cfg *Config) error {
+	for i, it := range cfg.SecretSync.Items {
+		r := it.Restart
+		switch r.Mode {
+		case "", RestartModeReferences, RestartModeAll, RestartModeNone:
+		default:
+			return fmt.Errorf("secret_sync.items[%d] (%s): invalid restart.mode %q "+
+				"(want references|all|none)", i, it.SecretName, r.Mode)
+		}
+		if len(r.Deployments) > 0 && r.Mode != "" {
+			return fmt.Errorf("secret_sync.items[%d] (%s): set either restart.deployments "+
+				"or restart.mode, not both", i, it.SecretName)
+		}
+	}
+	return nil
+}
+
 // Load reads configuration from env vars (prefix FKO_) and an optional file.
 // Env example: FKO_CLUSTER_NAMESPACE, FKO_CLUSTER_S3_BUCKET, FKO_AUTH_PASSWORD.
 func Load(configFile string) (*Config, error) {
@@ -287,7 +343,6 @@ func Load(configFile string) (*Config, error) {
 	v.SetDefault("auth.ldap.timeout_sec", 10)
 	v.SetDefault("secret_sync.enabled", false)
 	v.SetDefault("secret_sync.interval_sec", 300)
-	v.SetDefault("secret_sync.auto_restart", false)
 	v.SetDefault("secret_sync.openbao.kv_mount", "kv")
 	v.SetDefault("secret_sync.openbao.auth_mount", "kubernetes")
 	v.SetDefault("secret_sync.openbao.role", "vault-app-role")
@@ -318,7 +373,7 @@ func Load(configFile string) (*Config, error) {
 		"auth.ldap.bind_dn", "auth.ldap.bind_password", "auth.ldap.base_dn",
 		"auth.ldap.user_filter", "auth.ldap.timeout_sec",
 		"ha.self_cluster_id", "ha.default_peer_cluster_id", "ha.auto_all",
-		"secret_sync.enabled", "secret_sync.interval_sec", "secret_sync.auto_restart",
+		"secret_sync.enabled", "secret_sync.interval_sec",
 		"secret_sync.openbao.addr", "secret_sync.openbao.namespace", "secret_sync.openbao.kv_mount",
 		"secret_sync.openbao.auth_mount", "secret_sync.openbao.role", "secret_sync.openbao.token",
 		"secret_sync.openbao.cacert",
@@ -349,6 +404,9 @@ func Load(configFile string) (*Config, error) {
 	}
 	if cfg.HA.AutoAll && (cfg.HA.SelfClusterID == "" || cfg.HA.DefaultPeerClusterID == "") {
 		return nil, fmt.Errorf("ha.auto_all requires ha.self_cluster_id and ha.default_peer_cluster_id")
+	}
+	if err := validateRestartSpecs(&cfg); err != nil {
+		return nil, err
 	}
 	return &cfg, nil
 }

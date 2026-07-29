@@ -200,7 +200,8 @@ export interface HATask {
 export interface SecretSyncItemStatus {
   secretName: string;
   kvPath: string;
-  restartDeployment?: string;
+  restartMode?: string;
+  restartDeployments?: string[];
   ok: boolean;
   keys: number;
   error?: string;
@@ -208,7 +209,6 @@ export interface SecretSyncItemStatus {
 
 export interface SecretSyncStatus {
   enabled: boolean;
-  autoRestart?: boolean;
   intervalSec?: number;
   lastSyncUnix?: number;
   running?: boolean;
