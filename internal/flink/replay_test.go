@@ -248,3 +248,35 @@ func TestRevertRefusesWhenJobUnhealthyAndKeepsSession(t *testing.T) {
 		t.Error("replay-active annotation must be kept when revert fails preflight")
 	}
 }
+
+func TestReplayStatelessPatchIsSingleCoherentDiff(t *testing.T) {
+	var p map[string]any
+	if err := json.Unmarshal(replayStatelessPatch("SELECT 1"), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	spec := p["spec"].(map[string]any)
+	// One patch must carry BOTH the upgradeMode flip and the checksum, so the
+	// operator reconciles once (not once for checksum, then again for the mode).
+	if spec["job"].(map[string]any)["upgradeMode"] != "stateless" {
+		t.Error("patch missing upgradeMode=stateless")
+	}
+	fc := spec["flinkConfiguration"].(map[string]any)
+	if fc[sqlChecksumKey] != sqlChecksum("SELECT 1") {
+		t.Error("patch missing/incorrect sql-checksum")
+	}
+}
+
+func TestRedeployFromSavepointPatchFoldsChecksum(t *testing.T) {
+	var p map[string]any
+	if err := json.Unmarshal(redeployFromSavepointPatch("last-state", "s3://b/sp-1", "SELECT 2"), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	job := p["spec"].(map[string]any)["job"].(map[string]any)
+	if job["initialSavepointPath"] != "s3://b/sp-1" || job["upgradeMode"] != "last-state" || job["state"] != "running" {
+		t.Errorf("redeploy patch job fields wrong: %v", job)
+	}
+	fc := p["spec"].(map[string]any)["flinkConfiguration"].(map[string]any)
+	if fc[sqlChecksumKey] != sqlChecksum("SELECT 2") {
+		t.Error("redeploy patch should fold in the sql-checksum (single reconcile)")
+	}
+}
