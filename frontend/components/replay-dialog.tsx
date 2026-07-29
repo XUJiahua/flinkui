@@ -192,7 +192,7 @@ export function ReplayDialog({ open, jobName, cluster, onClose }: ReplayDialogPr
           <p className="text-xs text-muted-foreground">Replay: {progress}</p>
         )}
 
-        <div className="flex justify-end gap-2">
+        <div className="sticky bottom-0 flex justify-end gap-2 border-t bg-card pt-3">
           <Button variant="outline" onClick={onClose} disabled={submitting}>
             Cancel
           </Button>

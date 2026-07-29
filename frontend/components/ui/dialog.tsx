@@ -36,7 +36,7 @@ export function Dialog({ open, onClose, title, description, children, className 
         role="dialog"
         aria-modal="true"
         className={cn(
-          "relative w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg",
+          "relative flex max-h-[90vh] w-full max-w-lg flex-col rounded-lg border bg-card p-6 shadow-lg",
           className,
         )}
         onClick={(e) => e.stopPropagation()}
@@ -52,7 +52,7 @@ export function Dialog({ open, onClose, title, description, children, className 
         </Button>
         {title && <h2 className="text-lg font-semibold">{title}</h2>}
         {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
-        <div className="mt-4">{children}</div>
+        <div className="mt-4 min-h-0 flex-1 overflow-y-auto">{children}</div>
       </div>
     </div>
   );
