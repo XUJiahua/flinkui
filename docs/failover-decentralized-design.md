@@ -194,3 +194,16 @@ recoveryPoint）+ **对端(未观测)** 占位；按角色给 **Release**（本�
   fail-closed（本地会被 fence 拒启，无双跑），可重跑恢复，代价是 epoch 虚增；详见 §6。
 - 交接任务 in-memory（重启丢半途；视图可从 S3 token + handoff + 本地状态重建）。
 - 共享 S3 是单点协调平面，必须两侧可达且强一致。
+
+## HA 实施验收
+
+| 阶段 | 可重复验证 | 发布门槛 |
+|---|---|---|
+| 人工交接 | CAS 并发争抢、停止观察失败、残留 Pod、无恢复点、旧 Job 状态 | 双集群演练，验证恢复点兼容性和外部启动入口的所有权约束 |
+| S3 Lease | 从固定 etcd 版本移植 Grant、KeepAlive、Expire、Revoke、失联恢复的可比行为 | 在目标对象存储验证条件写和竞争，并注入提交结果未知、时钟偏差、进程暂停和晚到续租 |
+| 自动切换 | Controller 分步崩溃重启、A 失联但仍能写 Redis、Redis 故障转移 | 运行时 Fencing 集成通过，确认旧 Writer 被拒绝，测量 RTO/RPO |
+
+Lease 契约参考 [etcd v3.6.0 服务端集成测试](https://github.com/etcd-io/etcd/blob/f5d605a93abe2fdfa13880aab0f1f3a4203628dd/tests/integration/v3_lease_test.go)
+的 `TestV3LeaseExpire`、`TestV3LeaseKeepAlive`、`TestV3LeaseRevoke`、`TestV3LeaseFailover`，
+以及[客户端失去 quorum 测试](https://github.com/etcd-io/etcd/blob/f5d605a93abe2fdfa13880aab0f1f3a4203628dd/tests/integration/clientv3/lease/lease_test.go)
+的 `TestLeaseRenewLostQuorum`。Revoke 对应释放执行权并保留 epoch，服务端附属 KV 删除语义不适用。
