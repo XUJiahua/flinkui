@@ -50,13 +50,13 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.S
 		api.GET("/jobs/:name/metrics", h.getMetrics)
 		api.GET("/jobs/:name/recovery-points", h.recoveryPoints)
 		api.GET("/jobs/:name/flink-ui", h.flinkUIInfo)
-		api.Any("/jobs/:name/ui/*path", h.flinkUIProxy)
+		api.Any("/jobs/:name/ui/*path", h.requireReadOnlyHAProxy, h.flinkUIProxy)
 
 		api.POST("/jobs/:name/suspend", h.suspend)
-		api.POST("/jobs/:name/resume", h.resume)
-		api.POST("/jobs/:name/restart", h.restart)
+		api.POST("/jobs/:name/resume", h.requireUnmanagedJob, h.resume)
+		api.POST("/jobs/:name/restart", h.requireUnmanagedJob, h.restart)
 		api.POST("/jobs/:name/savepoint", h.savepoint)
-		api.POST("/jobs/:name/rollback", h.rollback)
+		api.POST("/jobs/:name/rollback", h.requireUnmanagedJob, h.rollback)
 
 		// Async operation status (savepoint / restart progress).
 		api.GET("/operations/:id", h.getOperation)
@@ -79,8 +79,8 @@ func New(cfg *config.Config, svc *flink.Service, st *store.Store, fo *failover.S
 			api.GET("/jobs/:name/sql", h.getSQL)
 			api.GET("/jobs/:name/replay", h.getReplay)
 			api.POST("/jobs/:name/replay/preview", h.replayPreview)
-			api.POST("/jobs/:name/replay", h.startReplay)
-			api.POST("/jobs/:name/replay/revert", h.revertReplay)
+			api.POST("/jobs/:name/replay", h.requireUnmanagedJob, h.startReplay)
+			api.POST("/jobs/:name/replay/revert", h.requireUnmanagedJob, h.revertReplay)
 		}
 	}
 

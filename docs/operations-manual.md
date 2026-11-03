@@ -246,9 +246,9 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 ### 7.4 计划切换（两侧都活，只是跨集群网断）——A → B
 
 1. **在 A 侧 flinkui** 点某组的 **Release（让位）** → 勾选确认 → 执行：
-   savepoint（本地健康）→ suspend 本地 → 等本地 JM Pod 归零 → token 置中性 → 写交接记录 `released`。
+   CAS 标记 `releasing` → savepoint（本地健康）→ suspend 本地 → 确认 JM/TM Pod 均退出 → token 置中性 → CAS 发布 `released`。
 2. **在 B 侧 flinkui** 点同一组的 **Promote（接管）** → 勾选确认 → 执行：
-   读交接记录（校验已 released）→ 选恢复点 → token 指向 B（epoch+1）→ 从恢复点启动本地 → 校验 RUNNING/STABLE。
+   校验 `released` → 选择非空恢复点 → CAS 保留新 epoch（`promoting`）→ token 指向 B → 从恢复点启动 → 观察到新 Job ID 及 RUNNING/STABLE → CAS 发布 `stable`。
 
 两侧看的是同一份 S3 交接记录，据此协作。
 
@@ -266,8 +266,28 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 ### 7.6 前提与注意
 
 - **共享 S3 必须两侧可达且强一致**（它是唯一协调平面）。S3 也不可达时只能纯人工。
-- 交接任务为 in-memory，平台重启会丢半途任务状态，但视图可从 S3 token+交接记录+本地状态重建。
+- 界面任务进度在内存中。若 S3 已持久化 `release_ready` 或 `verifying`，可在原操作侧重试相同的 Release 或 Promote 来完成最后的 CAS。重试保留原 epoch，不重复发出暂停、启动或 token 写入。
+- 若记录仍是 `releasing` 或 `promoting`，外部写入结果可能不明。先核对两侧 FlinkDeployment、Pod、token 和 handoff，再人工处置。保留当前 epoch，避免删除交接对象或直接强制接管。
 - 单集群双 namespace（无分区）场景可直接用常规运维/回滚，不需要去中心切换。
+
+
+### 7.7 HA 作业启动准入
+
+FlinkUI 对 HA 管理的作业拒绝普通 Jobs API 的 Resume、Restart、Rollback、Replay 和 Revert，返回 HTTP 409（`ha_managed_job`）。`ha.auto_all` 对控制台所在 namespace 的所有作业生效。HA 作业的 JobManager 代理保留只读访问，Secret 同步继续更新 Secret 并跳过自动重启。
+
+需要恢复已暂停的 HA 作业时，可在确认本侧拥有执行权和具备可用恢复点后，使用 HA 的 Release → 同组 Promote。普通 API 的 Suspend 仍可用于紧急停机。请在 Kubernetes RBAC 和 GitOps 中限制其他身份直接修改 HA 作业的运行状态。
+
+### 7.8 双集群验收
+
+使用专用 HA Group、测试 Kafka topic 和独立 Redis key 前缀，两个集群运行相同作业版本并共享恢复点存储。记录初始 token、epoch、Job ID 和最近一个成功 checkpoint。
+
+1. 保持 A 运行、B 暂停。验证 B 的普通 Promote 被拒绝，且未创建 B 的 Flink Pod。
+2. 在 A 执行 Release。确认 JM/TM Pod 退出、token 变为中性、交接记录为 `released`，并记录交接恢复点。
+3. 在 B 执行 Promote。核对 Operator 和 JobManager 观察到的新 Job ID、恢复路径与实际恢复日志，确认 token 指向 B、epoch 增加 1，A 仍处于暂停状态。
+4. 向测试 Kafka topic 写入可追踪的记录，检查 Redis 中的预期值。记录 A 停止输出至 B 首次正确输出的时间，以及恢复点与实际消费进度的差值。
+5. 对调 A/B 重做计划回切。每次保留 FlinkUI 任务结果、FlinkDeployment 状态和 S3 交接记录作为验收证据。
+
+`go test -race ./internal/failover -run '^TestTwoControllersPlannedHandoff$'` 使用两套控制器和 S3/Kubernetes 测试替身覆盖基本交接流程。真实双集群演练另需验证 Operator 恢复日志、Kafka 进度和 Redis 输出。
 
 ---
 
@@ -292,7 +312,7 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 | HA 页 `no HA groups configured` | 未声明 `ha.groups`（需 `-config`） |
 | HA `token unset while local job runs` | fencing token 未初始化；点该组 **Initialize (claim active)** 建立基线（见 §7.3） |
 | Release 一个作业后**所有组都变 neutral** | 多组**共用了同一个 `fencingKey`**。默认已是每组独立 `fencing/<组名>/active-cluster`；若显式设了共享 key，请改为每组独立（并与作业 initContainer 对齐，见 §7.2） |
-| Promote 报 `handoff phase is ... not released` | 该组从未 Release 过(没有可接管的让位)。要恢复**刚被 Release 的那一组**,就 Promote **同一组**;要在对端仍在跑/分区时强行接管,用 **force + 数据丢失确认**。常由上一行的"共用 fencingKey"误导去 Promote 了别的组 |
+| Promote 报 `Promote requires a released handoff ...` | 该组从未 Release 过(没有可接管的让位)。要恢复**刚被 Release 的那一组**,就 Promote **同一组**;要在对端仍在跑/分区时强行接管,用 **force + 数据丢失确认**。常由上一行的"共用 fencingKey"误导去 Promote 了别的组 |
 | HA 脑裂告警（两侧都 RUNNING） | 立即介入：确认唯一活跃侧，停掉多余一侧，修正 token |
 
 ---

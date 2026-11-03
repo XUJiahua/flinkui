@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/fko-demo/flinkui/internal/flink"
 	"github.com/fko-demo/flinkui/internal/store"
 	"github.com/google/uuid"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // taskStore is an in-memory registry of HA tasks (bounded retention).
@@ -111,20 +113,45 @@ func (s *Service) Claim(name string) error {
 		return fmt.Errorf("HA group %q not found", name)
 	}
 
+	rec, etag, exists, err := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if rec.Group == g.Name && rec.ActiveClusterID == g.ClusterID && rec.Phase == store.PhaseStable {
+			token, err := s.coord.ReadToken(ctx, g.FencingKey)
+			if err != nil {
+				return err
+			}
+			if token != g.ClusterID {
+				return fmt.Errorf("Claim refused: stable handoff and token disagree")
+			}
+			return nil
+		}
+		return fmt.Errorf("Claim requires an uninitialized group")
+	}
+	token, err := s.coord.ReadToken(ctx, g.FencingKey)
+	if err != nil {
+		return err
+	}
+	if token != "" && token != g.ClusterID {
+		return fmt.Errorf("Claim refused: token already points elsewhere")
+	}
+	rec = &store.HandoffRecord{
+		Group: g.Name, ActiveClusterID: g.ClusterID, Epoch: 1, Phase: store.PhasePromoting,
+	}
+	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag); err != nil {
+		return err
+	}
+	etag, err = s.reservedHandoffETag(ctx, g, rec)
+	if err != nil {
+		return err
+	}
 	if err := s.coord.WriteToken(ctx, g.FencingKey, g.ClusterID); err != nil {
 		return err
 	}
-	// Preserve an existing epoch if higher; otherwise start at 1.
-	epoch := int64(1)
-	if rec, ok, _ := s.coord.ReadHandoff(ctx, g.HandoffKey); ok && rec != nil && rec.Epoch > epoch {
-		epoch = rec.Epoch
-	}
-	return s.coord.WriteHandoff(ctx, g.HandoffKey, &store.HandoffRecord{
-		Group:           g.Name,
-		ActiveClusterID: g.ClusterID,
-		Epoch:           epoch,
-		Phase:           store.PhaseStable,
-	})
+	rec.Phase = store.PhaseStable
+	return s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag)
 }
 
 func (s *Service) failTask(id, step string, err error) {
@@ -136,7 +163,7 @@ func (s *Service) failTask(id, step string, err error) {
 }
 
 // Release performs the source-side, LOCAL-only step-down: savepoint (if healthy)
-// -> suspend -> wait local JM pod=0 -> neutral token -> write handoff(released).
+// -> suspend -> wait for local Flink pods to exit -> neutral token -> write handoff(released).
 func (s *Service) Release(name string) (*HATask, error) {
 	rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
 	g, ok := s.resolveGroup(rctx, name)
@@ -165,6 +192,27 @@ func (s *Service) doRelease(taskID string, g config.LocalHAGroup) {
 	}
 	fsvc := flink.NewService(acc, s.cfg)
 
+	rec, etag, _, err := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
+	if err == nil && rec != nil && rec.Group == g.Name && rec.ActiveClusterID == g.ClusterID &&
+		rec.Phase == store.PhaseReleaseReady {
+		s.finishRelease(ctx, taskID, g, rec, etag)
+		return
+	}
+	if err == nil && (rec == nil || rec.Group != g.Name || rec.ActiveClusterID != g.ClusterID || rec.Phase != store.PhaseStable) {
+		err = fmt.Errorf("Release requires a stable handoff owned by this cluster")
+	}
+	if err == nil {
+		rec.Phase = store.PhaseReleasing
+		err = s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag)
+	}
+	if err == nil {
+		etag, err = s.reservedHandoffETag(ctx, g, rec)
+	}
+	if err != nil {
+		s.failTask(taskID, StepSavepoint, err)
+		return
+	}
+
 	// 1. Savepoint if the local job is healthy.
 	var rp store.RecoveryPointRef
 	s.tasks.setStep(taskID, StepSavepoint, StepRunning, "checking local health")
@@ -188,11 +236,14 @@ func (s *Service) doRelease(taskID string, g config.LocalHAGroup) {
 	}
 	s.tasks.setStep(taskID, StepSuspendLocal, StepDone, "")
 
-	// 3. Wait for the local JobManager pod to terminate.
-	s.tasks.setStep(taskID, StepWaitStopped, StepRunning, "waiting for local JobManager to terminate")
-	s.waitJMStopped(ctx, acc, g.Deployment, func(pods int) {
-		s.tasks.setStep(taskID, StepWaitStopped, StepRunning, fmt.Sprintf("waiting for local JobManager (%d running)", pods))
-	})
+	// 3. Wait for local Flink pods to terminate.
+	s.tasks.setStep(taskID, StepWaitStopped, StepRunning, "waiting for local Flink pods to terminate")
+	if err := s.waitLocalStopped(ctx, acc, g.Deployment, func(pods int) {
+		s.tasks.setStep(taskID, StepWaitStopped, StepRunning, fmt.Sprintf("waiting for local Flink pods (%d remaining)", pods))
+	}); err != nil {
+		s.failTask(taskID, StepWaitStopped, err)
+		return
+	}
 	s.tasks.setStep(taskID, StepWaitStopped, StepDone, "local stopped")
 
 	// 4. Neutral token — fence both sides.
@@ -203,43 +254,52 @@ func (s *Service) doRelease(taskID string, g config.LocalHAGroup) {
 	}
 	s.tasks.setStep(taskID, StepTokenNeutral, StepDone, "both sides fenced")
 
-	// 5. Write handoff (phase=released) so the peer can take over.
-	s.tasks.setStep(taskID, StepWriteHandoff, StepRunning, "publishing handoff record")
-	if err := s.writeReleasedHandoff(ctx, g, rp); err != nil {
+	// Persist the completed side effects before publishing the final phase.
+	rec.Phase = store.PhaseReleaseReady
+	rec.ReleasedBy = g.ClusterID
+	rec.RecoveryPoint = rp
+	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag); err != nil {
 		s.failTask(taskID, StepWriteHandoff, err)
 		return
 	}
-	s.tasks.setStep(taskID, StepWriteHandoff, StepDone, "released; peer may now Promote")
-	s.tasks.update(taskID, func(t *HATask) { t.Status = TaskSucceeded })
+	etag, err = s.reservedHandoffETag(ctx, g, rec)
+	if err != nil {
+		s.failTask(taskID, StepWriteHandoff, err)
+		return
+	}
+	s.finishRelease(ctx, taskID, g, rec, etag)
 }
 
-// writeReleasedHandoff sets phase=released via a compare-and-swap loop so a
-// concurrent handoff update (e.g. the peer writing) cannot be silently clobbered
-// nor clobber us; on CAS conflict it re-reads and retries a bounded number of
-// times.
-func (s *Service) writeReleasedHandoff(ctx context.Context, g config.LocalHAGroup, rp store.RecoveryPointRef) error {
-	const attempts = 3
-	for i := 0; i < attempts; i++ {
-		rec, etag, _, err := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
-		if err != nil {
-			return err
-		}
-		if rec == nil {
-			rec = &store.HandoffRecord{Group: g.Name}
-		}
-		rec.Phase = store.PhaseReleased
-		rec.ReleasedBy = g.ClusterID
-		rec.RecoveryPoint = rp
-		err = s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag)
-		if err == nil {
-			return nil
-		}
-		if errors.Is(err, store.ErrHandoffConflict) {
-			continue // re-read and retry
-		}
-		return err
+func (s *Service) finishRelease(ctx context.Context, taskID string, g config.LocalHAGroup, rec *store.HandoffRecord, etag string) {
+	s.tasks.setStep(taskID, StepWriteHandoff, StepRunning, "publishing handoff record")
+	rec.Phase = store.PhaseReleased
+	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag); err != nil {
+		s.failTask(taskID, StepWriteHandoff, err)
+		return
 	}
-	return fmt.Errorf("handoff record kept changing during release (CAS retries exhausted)")
+	s.tasks.update(taskID, func(t *HATask) {
+		t.RecoveryPoint = rec.RecoveryPoint
+		t.Epoch = rec.Epoch
+		for i := range t.Steps {
+			t.Steps[i].Status = StepDone
+		}
+		t.Status = TaskSucceeded
+	})
+	s.tasks.setStep(taskID, StepWriteHandoff, StepDone, "released; peer may now Promote")
+}
+
+// reservedHandoffETag confirms that the reservation is visible before changing
+// the legacy token or issuing a Kubernetes operation.
+func (s *Service) reservedHandoffETag(ctx context.Context, g config.LocalHAGroup, expected *store.HandoffRecord) (string, error) {
+	rec, etag, _, err := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
+	if err != nil {
+		return "", err
+	}
+	if rec == nil || rec.Group != expected.Group || rec.ActiveClusterID != expected.ActiveClusterID ||
+		rec.Epoch != expected.Epoch || rec.Phase != expected.Phase || !rec.UpdatedAt.Equal(expected.UpdatedAt) {
+		return "", store.ErrHandoffConflict
+	}
+	return etag, nil
 }
 
 // Promote performs the target-side, LOCAL-only take-over: pick recovery point ->
@@ -277,41 +337,46 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 
 	// 1. Read handoff and gate on it unless forcing.
 	s.tasks.setStep(taskID, StepReadHandoff, StepRunning, "reading handoff record")
-	rec, handoffETag, _, _ := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
-	if !force {
-		released := rec != nil && rec.Phase == store.PhaseReleased
-		if !released {
-			phase := "unset"
-			if rec != nil && rec.Phase != "" {
-				phase = rec.Phase
-			}
-			s.failTask(taskID, StepReadHandoff,
-				fmt.Errorf("this group's handoff phase is %q, not %q — the peer has not stepped down, so there is nothing to take over. "+
-					"To bring an already-released side back, Promote the SAME group that was Released. "+
-					"For a disaster take-over of a still-running/partitioned peer, use force (risks split-brain; requires acknowledging data loss)",
-					phase, store.PhaseReleased))
-			return
-		}
+	rec, handoffETag, _, err := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
+	if err == nil && rec != nil && rec.Group == g.Name && rec.ActiveClusterID == g.ClusterID &&
+		rec.Phase == store.PhaseVerifying {
+		s.finishPromotion(ctx, taskID, g, acc, rec, handoffETag)
+		return
+	}
+	if err == nil {
+		err = validatePromotion(g, rec, force)
+	}
+	if err != nil {
+		s.failTask(taskID, StepReadHandoff, err)
+		return
 	}
 	s.tasks.setStep(taskID, StepReadHandoff, StepDone, "")
 
 	// 2. Pick recovery point: handoff's savepoint if present, else latest checkpoint.
 	s.tasks.setStep(taskID, StepPickRecovery, StepRunning, "selecting recovery point")
 	path, kind := s.pickRecoveryPoint(ctx, g, rec)
+	if path == "" {
+		s.failTask(taskID, StepPickRecovery, fmt.Errorf("no recovery point available"))
+		return
+	}
 	s.tasks.update(taskID, func(t *HATask) { t.RecoveryPoint = store.RecoveryPointRef{Path: path, Kind: kind} })
 	s.tasks.setStep(taskID, StepPickRecovery, StepDone, fmt.Sprintf("%s: %s", kind, path))
+
+	previous, err := acc.GetFlinkDeployment(ctx, g.Deployment)
+	if err != nil {
+		s.failTask(taskID, StepStartLocal, err)
+		return
+	}
+	previousJobID, _, _ := unstructured.NestedString(previous.Object, "status", "jobStatus", "jobId")
 
 	// 3. Claim the handoff (epoch+1) via CAS, then point the token at self.
 	//    The CAS is the atomic winner: if the peer promoted at the same instant
 	//    the conditional write fails and we abort instead of overwriting.
-	epoch := int64(1)
-	if rec != nil {
-		epoch = rec.Epoch + 1
-	}
+	epoch := rec.Epoch + 1
 	s.tasks.setStep(taskID, StepTokenToSelf, StepRunning, "claiming handoff -> "+g.ClusterID)
 	newRec := &store.HandoffRecord{
 		Group: g.Name, ActiveClusterID: g.ClusterID, Epoch: epoch,
-		Phase: store.PhaseStable, RecoveryPoint: store.RecoveryPointRef{Path: path, Kind: kind},
+		Phase: store.PhasePromoting, RecoveryPoint: store.RecoveryPointRef{Path: path, Kind: kind},
 	}
 	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, newRec, handoffETag); err != nil {
 		if errors.Is(err, store.ErrHandoffConflict) {
@@ -319,6 +384,11 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 				fmt.Errorf("the peer changed the handoff concurrently (likely promoted at the same time); aborted to avoid split-brain — re-check state and retry"))
 			return
 		}
+		s.failTask(taskID, StepTokenToSelf, err)
+		return
+	}
+	reservationETag, err := s.reservedHandoffETag(ctx, g, newRec)
+	if err != nil {
 		s.failTask(taskID, StepTokenToSelf, err)
 		return
 	}
@@ -338,20 +408,59 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 	}
 	s.tasks.setStep(taskID, StepStartLocal, StepDone, "start requested")
 
-	// 5. Verify local becomes RUNNING/STABLE (best-effort).
-	s.tasks.setStep(taskID, StepVerifyLocal, StepRunning, "waiting for local RUNNING/STABLE")
-	if s.verifyLocal(ctx, acc, g.Deployment, 90*time.Second) {
-		s.tasks.setStep(taskID, StepVerifyLocal, StepDone, "local RUNNING/STABLE")
-	} else {
-		s.tasks.setStep(taskID, StepVerifyLocal, StepDone, "local starting (not yet STABLE; check the dashboard)")
+	newRec.Phase = store.PhaseVerifying
+	newRec.PreviousJobID = previousJobID
+	newRec.RedeployNonce = nonce
+	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, newRec, reservationETag); err != nil {
+		s.failTask(taskID, StepVerifyLocal, err)
+		return
 	}
-	s.tasks.update(taskID, func(t *HATask) { t.Status = TaskSucceeded })
+	reservationETag, err = s.reservedHandoffETag(ctx, g, newRec)
+	if err != nil {
+		s.failTask(taskID, StepVerifyLocal, err)
+		return
+	}
+	s.finishPromotion(ctx, taskID, g, acc, newRec, reservationETag)
+}
+
+func (s *Service) finishPromotion(ctx context.Context, taskID string, g config.LocalHAGroup, acc cluster.ClusterAccessor, rec *store.HandoffRecord, etag string) {
+	s.tasks.setStep(taskID, StepVerifyLocal, StepRunning, "waiting for local RUNNING/STABLE")
+	if rec.RecoveryPoint.Path == "" || rec.RedeployNonce == 0 || !s.verifyLocal(ctx, acc, g.Deployment, rec, 90*time.Second) {
+		s.failTask(taskID, StepVerifyLocal, fmt.Errorf("local readiness could not be confirmed"))
+		return
+	}
+	rec.Phase = store.PhaseStable
+	rec.PreviousJobID = ""
+	rec.RedeployNonce = 0
+	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag); err != nil {
+		s.failTask(taskID, StepVerifyLocal, err)
+		return
+	}
+	s.tasks.update(taskID, func(t *HATask) {
+		t.Epoch = rec.Epoch
+		t.RecoveryPoint = rec.RecoveryPoint
+		for i := range t.Steps {
+			t.Steps[i].Status = StepDone
+		}
+		t.Status = TaskSucceeded
+	})
+	s.tasks.setStep(taskID, StepVerifyLocal, StepDone, "local RUNNING/STABLE")
+}
+
+func validatePromotion(g config.LocalHAGroup, rec *store.HandoffRecord, force bool) error {
+	if rec != nil && rec.Group == g.Name && rec.Epoch > 0 && rec.Epoch < math.MaxInt64 {
+		if rec.Phase == store.PhaseReleased ||
+			(force && rec.Phase == store.PhaseStable && rec.ActiveClusterID == g.PeerClusterID) {
+			return nil
+		}
+	}
+	return fmt.Errorf("Promote requires a released handoff or a stable peer handoff for an acknowledged forced promotion")
 }
 
 // pickRecoveryPoint prefers the handoff's recovery point; else the latest
 // checkpoint from shared S3; else any savepoint; else none.
 func (s *Service) pickRecoveryPoint(ctx context.Context, g config.LocalHAGroup, rec *store.HandoffRecord) (string, string) {
-	if rec != nil && rec.RecoveryPoint.Path != "" {
+	if rec != nil && rec.Phase == store.PhaseReleased && rec.RecoveryPoint.Path != "" {
 		return rec.RecoveryPoint.Path, rec.RecoveryPoint.Kind
 	}
 	if s.recov != nil {
@@ -386,43 +495,56 @@ func (s *Service) recoveryDirs(ctx context.Context, g config.LocalHAGroup) (sp, 
 	return sp, cp, job
 }
 
-// waitJMStopped polls until the deployment's JobManager pod count reaches zero.
-func (s *Service) waitJMStopped(ctx context.Context, acc cluster.ClusterAccessor, dep string, onTick func(pods int)) {
-	selector := fmt.Sprintf("app=%s,component=jobmanager", dep)
-	deadline := time.Now().Add(time.Duration(s.cfg.StopTimeoutSec) * time.Second)
-	for time.Now().Before(deadline) {
+// waitLocalStopped requires a successful observation that both pod types are gone.
+func (s *Service) waitLocalStopped(ctx context.Context, acc cluster.ClusterAccessor, dep string, onTick func(pods int)) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.StopTimeoutSec)*time.Second)
+	defer cancel()
+	selector := fmt.Sprintf("app=%s,component in (jobmanager,taskmanager)", dep)
+	for ctx.Err() == nil {
 		n, err := acc.CountPods(ctx, selector)
 		if err == nil {
-			if onTick != nil {
-				onTick(n)
-			}
-			if n == 0 {
-				return
+			onTick(n)
+			if n == 0 && ctx.Err() == nil {
+				return nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-time.After(5 * time.Second):
 		}
 	}
+	return fmt.Errorf("local pod termination could not be confirmed: %w", ctx.Err())
 }
 
-// verifyLocal polls the local deployment until RUNNING/STABLE or timeout.
-func (s *Service) verifyLocal(ctx context.Context, acc cluster.ClusterAccessor, dep string, timeout time.Duration) bool {
-	fsvc := flink.NewService(acc, s.cfg)
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if fsvc.StatusText(ctx, dep) == "RUNNING/STABLE" {
+// verifyLocal requires a fresh job ID so stale pre-patch status cannot complete promotion.
+func (s *Service) verifyLocal(ctx context.Context, acc cluster.ClusterAccessor, dep string, rec *store.HandoffRecord, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for ctx.Err() == nil {
+		deployment, err := acc.GetFlinkDeployment(ctx, dep)
+		if err == nil && promotionSpecMatches(deployment, rec) && promotedJobReady(deployment, rec.PreviousJobID) && ctx.Err() == nil {
 			return true
 		}
 		select {
 		case <-ctx.Done():
-			return false
 		case <-time.After(5 * time.Second):
 		}
 	}
 	return false
+}
+
+func promotionSpecMatches(deployment *unstructured.Unstructured, rec *store.HandoffRecord) bool {
+	state, _, _ := unstructured.NestedString(deployment.Object, "spec", "job", "state")
+	path, _, _ := unstructured.NestedString(deployment.Object, "spec", "job", "initialSavepointPath")
+	nonce, _, _ := unstructured.NestedInt64(deployment.Object, "spec", "job", "savepointRedeployNonce")
+	return state == "running" && path == rec.RecoveryPoint.Path && nonce == rec.RedeployNonce
+}
+
+func promotedJobReady(deployment *unstructured.Unstructured, previousJobID string) bool {
+	jobID, _, _ := unstructured.NestedString(deployment.Object, "status", "jobStatus", "jobId")
+	state, _, _ := unstructured.NestedString(deployment.Object, "status", "jobStatus", "state")
+	lifecycle, _, _ := unstructured.NestedString(deployment.Object, "status", "lifecycleState")
+	return jobID != "" && jobID != previousJobID && state == "RUNNING" && lifecycle == "STABLE"
 }
 
 // statePatchJSON builds a spec.job merge patch; savepointPath adds

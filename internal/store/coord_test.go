@@ -1,7 +1,16 @@
 package store
 
 import (
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+
 	"errors"
+	"github.com/fko-demo/flinkui/internal/config"
 	"testing"
 )
 
@@ -58,5 +67,78 @@ func TestIsPreconditionFailed(t *testing.T) {
 				t.Errorf("isPreconditionFailed(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConcurrentHandoffCASHasOneWinner(t *testing.T) {
+	var mu sync.Mutex
+	var object []byte
+	var etag string
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method {
+		case http.MethodGet:
+			if object == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("ETag", etag)
+			_, _ = w.Write(object)
+		case http.MethodPut:
+			if (object == nil && r.Header.Get("If-None-Match") != "*") ||
+				(object != nil && r.Header.Get("If-Match") != etag) {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				return
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			object = body
+			etag = fmt.Sprintf("%q", sha256.Sum256(body))
+			w.Header().Set("ETag", etag)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer endpoint.Close()
+	ctx := context.Background()
+	coord, err := NewCoord(ctx, config.S3Config{
+		Endpoint: endpoint.URL, Bucket: "flink", PathStyle: true, AccessKey: "test", SecretKey: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const key = "handoff"
+	for _, epoch := range []int64{1, 2} {
+		_, expected, _, err := coord.ReadHandoffWithETag(ctx, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const contenders = 32
+		results := make(chan error, contenders)
+		for i := range contenders {
+			go func() {
+				results <- coord.WriteHandoffCAS(ctx, key, &HandoffRecord{
+					Group: "orders", Epoch: epoch, Phase: PhasePromoting, ActiveClusterID: fmt.Sprint(i),
+				}, expected)
+			}()
+		}
+		winners := 0
+		for range contenders {
+			switch err := <-results; {
+			case err == nil:
+				winners++
+			case errors.Is(err, ErrHandoffConflict):
+			default:
+				t.Errorf("unexpected CAS result: %v", err)
+			}
+		}
+		rec, _, ok, err := coord.ReadHandoffWithETag(ctx, key)
+		if winners != 1 || err != nil || !ok || rec.Epoch != epoch {
+			t.Fatalf("epoch %d: winners=%d, handoff=%+v, present=%v, error=%v", epoch, winners, rec, ok, err)
+		}
 	}
 }

@@ -19,9 +19,12 @@ import (
 
 // Handoff record phases.
 const (
-	PhaseStable    = "stable"
-	PhaseReleased  = "released"
-	PhasePromoting = "promoting"
+	PhaseStable       = "stable"
+	PhaseReleasing    = "releasing"
+	PhaseReleased     = "released"
+	PhasePromoting    = "promoting"
+	PhaseReleaseReady = "release_ready"
+	PhaseVerifying    = "verifying"
 )
 
 // RecoveryPointRef is the recovery point recorded for a handoff.
@@ -40,6 +43,8 @@ type HandoffRecord struct {
 	Epoch           int64            `json:"epoch"`
 	Phase           string           `json:"phase"`
 	RecoveryPoint   RecoveryPointRef `json:"recoveryPoint"`
+	PreviousJobID   string           `json:"previousJobId,omitempty"`
+	RedeployNonce   int64            `json:"redeployNonce,omitempty"`
 	ReleasedBy      string           `json:"releasedBy,omitempty"`
 	UpdatedAt       time.Time        `json:"updatedAt"`
 }
@@ -113,9 +118,8 @@ func (c *Coord) putObject(ctx context.Context, key, contentType string, body []b
 // putObjectCond writes an object with optional S3 conditional headers. ifMatch
 // requires the current ETag to equal the given value (compare-and-swap update);
 // ifNoneMatch="*" requires the object to not already exist (create-only). A 412
-// Precondition Failed is surfaced as ErrHandoffConflict. Backends that don't
-// support conditional writes simply ignore the headers, degrading to
-// last-write-wins (no worse than before).
+// Precondition Failed is surfaced as ErrHandoffConflict. Safe coordination
+// requires the configured backend to enforce both conditional headers.
 func (c *Coord) putObjectCond(ctx context.Context, key, contentType string, body []byte, ifMatch, ifNoneMatch string) error {
 	in := &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
@@ -183,6 +187,9 @@ func (c *Coord) ReadHandoffWithETag(ctx context.Context, key string) (*HandoffRe
 	}
 	if !ok {
 		return nil, "", false, nil
+	}
+	if etag == "" {
+		return nil, "", false, fmt.Errorf("read handoff: S3 returned an object without an ETag")
 	}
 	var rec HandoffRecord
 	if err := json.Unmarshal(b, &rec); err != nil {

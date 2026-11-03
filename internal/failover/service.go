@@ -225,34 +225,16 @@ func (s *Service) readHandoff(ctx context.Context, g config.LocalHAGroup) *store
 	return rec
 }
 
-// deriveRole sets Role and a local-inconsistency Warning from the token and the
-// local job state (the peer side is not observed cross-cluster).
-// SafeToRestart reports whether the FlinkDeployment dep may be restarted right
-// now by the secret-sync loop. A deployment that is NOT part of any HA group is
-// always safe. For an HA-managed deployment it is safe ONLY when this console's
-// local side is the active owner AND the local job is healthy — never on the
-// standby side (its job should stay stopped) and never mid-switch (neutral
-// token). reason explains a false result.
-func (s *Service) SafeToRestart(ctx context.Context, dep string) (bool, string) {
-	for _, g := range s.groupConfigs(ctx) {
-		if g.Deployment != dep {
-			continue
-		}
-		v, err := s.LocalView(ctx, g.Name)
-		if err != nil {
-			return false, "HA view error: " + err.Error()
-		}
-		if v.Role != RoleActive {
-			return false, "HA role=" + v.Role + " (secret-sync restarts only the active side)"
-		}
-		if v.Local == nil || !v.Local.Healthy {
-			return false, "HA active but local job is not RUNNING/STABLE"
-		}
-		return true, ""
+// SafeToRestart is the secret-sync guard for the console's namespace.
+func (s *Service) SafeToRestart(_ context.Context, dep string) (bool, string) {
+	if s.cfg.IsLocalHADeployment(dep) {
+		return false, "HA-managed deployment requires an HA-coordinated restart"
 	}
-	return true, "" // not an HA-managed deployment
+	return true, ""
 }
 
+// deriveRole sets Role and a local-inconsistency Warning from the token and the
+// local job state (the peer side is not observed cross-cluster).
 func (s *Service) deriveRole(v *LocalView, g config.LocalHAGroup) {
 	localRunning := v.Local != nil && v.Local.Healthy
 	switch v.Fencing.PointsTo {
@@ -260,13 +242,9 @@ func (s *Service) deriveRole(v *LocalView, g config.LocalHAGroup) {
 		v.Role = RoleActive
 		if !localRunning {
 			if v.Local != nil && (v.Local.DesiredState == "suspended" || v.Local.Health == flink.HealthSuspended) {
-				// A plain Jobs-page Suspend stops the local job without touching
-				// the fencing token/handoff, so this side still owns the group.
-				// The fix is Resume, not Promote (Promote takes over a peer that
-				// has Released; nothing here has been released).
-				v.Warning = "this side already owns the group but its local job is suspended — Resume it on the Jobs page. This is a local suspend, not a failover: Promote does not apply."
+				v.Warning = "this side owns the group and the local job is suspended — use the HA handoff workflow to recover it"
 			} else {
-				v.Warning = "fencing token points here but the local job is not RUNNING/STABLE — Resume/Restart it on the Jobs page (Promote is only for taking over a peer that has Released)"
+				v.Warning = "fencing token points here but the local job is not RUNNING/STABLE — use the HA handoff workflow if a coordinated recovery is needed"
 			}
 		}
 	case PointsPeer:
