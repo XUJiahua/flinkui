@@ -46,6 +46,7 @@ type HandoffRecord struct {
 	PreviousJobID   string           `json:"previousJobId,omitempty"`
 	RedeployNonce   int64            `json:"redeployNonce,omitempty"`
 	ReleasedBy      string           `json:"releasedBy,omitempty"`
+	Lease           *LeaseState      `json:"lease,omitempty"`
 	UpdatedAt       time.Time        `json:"updatedAt"`
 }
 
