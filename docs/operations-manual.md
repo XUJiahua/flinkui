@@ -277,6 +277,18 @@ FlinkUI 对 HA 管理的作业拒绝普通 Jobs API 的 Resume、Restart、Rollb
 
 需要恢复已暂停的 HA 作业时，可在确认本侧拥有执行权和具备可用恢复点后，使用 HA 的 Release → 同组 Promote。普通 API 的 Suspend 仍可用于紧急停机。请在 Kubernetes RBAC 和 GitOps 中限制其他身份直接修改 HA 作业的运行状态。
 
+### 7.8 双集群验收
+
+使用专用 HA Group、测试 Kafka topic 和独立 Redis key 前缀，两个集群运行相同作业版本并共享恢复点存储。记录初始 token、epoch、Job ID 和最近一个成功 checkpoint。
+
+1. 保持 A 运行、B 暂停。验证 B 的普通 Promote 被拒绝，且未创建 B 的 Flink Pod。
+2. 在 A 执行 Release。确认 JM/TM Pod 退出、token 变为中性、交接记录为 `released`，并记录交接恢复点。
+3. 在 B 执行 Promote。核对 Operator 和 JobManager 观察到的新 Job ID、恢复路径与实际恢复日志，确认 token 指向 B、epoch 增加 1，A 仍处于暂停状态。
+4. 向测试 Kafka topic 写入可追踪的记录，检查 Redis 中的预期值。记录 A 停止输出至 B 首次正确输出的时间，以及恢复点与实际消费进度的差值。
+5. 对调 A/B 重做计划回切。每次保留 FlinkUI 任务结果、FlinkDeployment 状态和 S3 交接记录作为验收证据。
+
+`go test -race ./internal/failover -run '^TestTwoControllersPlannedHandoff$'` 使用两套控制器和 S3/Kubernetes 测试替身覆盖基本交接流程。真实双集群演练另需验证 Operator 恢复日志、Kafka 进度和 Redis 输出。
+
 ---
 
 ## 8. 健康检查与可观测性
