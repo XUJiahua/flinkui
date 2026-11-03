@@ -220,3 +220,15 @@ Lease 契约参考 [etcd v3.6.0 服务端集成测试](https://github.com/etcd-i
 | 迟到续租、并发争抢 | 过期后的写入回执不能重新授权；32 个竞争者最多获得一个授权 |
 
 首批只提供 Lease 原语，使用每组专用 CAS 对象，尚未接入现有 Claim、Release 或 Promote。部署前需保证各参与方使用同一绝对时钟误差上限，且协调对象禁止删除或回滚。晚到写入可能推迟接管，控制器不得根据该写入恢复旧授权。真实 S3 语义和运行时 Fencing 仍是自动接管的验收条件。
+
+### 目标 S3 条件写验收
+
+使用 FlinkUI 的 `FKO_CLUSTER_S3_*` 环境变量配置实际协调 bucket、prefix 和凭证，然后运行：
+
+```bash
+FKO_RUN_S3_CAS_PROBE=1 go test -count=1 -v ./internal/store -run '^TestTargetS3CASProbe$'
+```
+
+探测在协调前缀下的 `cas-probes/<UUID>` 创建临时对象，验证重复创建失败、8 个并发条件更新恰好一个成功，以及旧 ETag 写入失败后获胜内容仍在。探测账号需要对该临时路径有 Get、Put 和 Delete 权限。协调记录本身应禁止删除和回滚。版本化 bucket 可为探测路径单独配置历史版本清理规则。
+
+默认 CI 使用 HTTP 测试替身，分别验证忽略 `If-None-Match` 或 `If-Match` 的后端会被拒绝。目标 S3 测试需显式开启。
