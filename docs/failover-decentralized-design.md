@@ -207,3 +207,16 @@ Lease 契约参考 [etcd v3.6.0 服务端集成测试](https://github.com/etcd-i
 的 `TestV3LeaseExpire`、`TestV3LeaseKeepAlive`、`TestV3LeaseRevoke`、`TestV3LeaseFailover`，
 以及[客户端失去 quorum 测试](https://github.com/etcd-io/etcd/blob/f5d605a93abe2fdfa13880aab0f1f3a4203628dd/tests/integration/clientv3/lease/lease_test.go)
 的 `TestLeaseRenewLostQuorum`。Revoke 对应释放执行权并保留 epoch，服务端附属 KV 删除语义不适用。
+
+### Phase 2 首批 Lease 契约
+
+| 上游行为 | FlinkUI 验证 |
+|---|---|
+| `TestLeaseGrant` / `TestV3LeaseKeepAlive` | 获取 epoch；续租保持 epoch 和 session；原过期时间到达时备侧仍不能接管 |
+| `TestV3LeaseExpire` / `TestV3LeaseFailover` | 使用两端最大允许时钟差验证交接边界；新持有者增加 epoch，旧会话续租被拒绝 |
+| `TestV3LeaseRevoke` | 撤销后拒绝原会话续租；保留记录和 epoch，等待缓存授权窗口结束才允许接管 |
+| `TestLeaseRenewLostQuorum` | S3 读或条件写失败时无法获得新授权 |
+| S3 请求回执丢失 | 回读确认独立的 mutation ID；读取失败或 ID 不匹配时拒绝授权 |
+| 迟到续租、并发争抢 | 过期后的写入回执不能重新授权；32 个竞争者最多获得一个授权 |
+
+首批只提供 Lease 原语，使用每组专用 CAS 对象，尚未接入现有 Claim、Release 或 Promote。部署前需保证各参与方使用同一绝对时钟误差上限，且协调对象禁止删除或回滚。晚到写入可能推迟接管，控制器不得根据该写入恢复旧授权。真实 S3 语义和运行时 Fencing 仍是自动接管的验收条件。
