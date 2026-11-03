@@ -19,10 +19,12 @@ import (
 
 // Handoff record phases.
 const (
-	PhaseStable    = "stable"
-	PhaseReleasing = "releasing"
-	PhaseReleased  = "released"
-	PhasePromoting = "promoting"
+	PhaseStable       = "stable"
+	PhaseReleasing    = "releasing"
+	PhaseReleased     = "released"
+	PhasePromoting    = "promoting"
+	PhaseReleaseReady = "release_ready"
+	PhaseVerifying    = "verifying"
 )
 
 // RecoveryPointRef is the recovery point recorded for a handoff.
@@ -41,6 +43,8 @@ type HandoffRecord struct {
 	Epoch           int64            `json:"epoch"`
 	Phase           string           `json:"phase"`
 	RecoveryPoint   RecoveryPointRef `json:"recoveryPoint"`
+	PreviousJobID   string           `json:"previousJobId,omitempty"`
+	RedeployNonce   int64            `json:"redeployNonce,omitempty"`
 	ReleasedBy      string           `json:"releasedBy,omitempty"`
 	UpdatedAt       time.Time        `json:"updatedAt"`
 }

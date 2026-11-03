@@ -122,7 +122,7 @@ func main() {
 			ss = nil
 		} else if ss != nil {
 			if fo != nil {
-				// HA interlock: only restart the active side, never mid-switch.
+				// HA deployments require a coordinated restart.
 				ss.SetRestartGuard(fo)
 			}
 			go ss.Run(context.Background())

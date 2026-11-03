@@ -193,6 +193,11 @@ func (s *Service) doRelease(taskID string, g config.LocalHAGroup) {
 	fsvc := flink.NewService(acc, s.cfg)
 
 	rec, etag, _, err := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
+	if err == nil && rec != nil && rec.Group == g.Name && rec.ActiveClusterID == g.ClusterID &&
+		rec.Phase == store.PhaseReleaseReady {
+		s.finishRelease(ctx, taskID, g, rec, etag)
+		return
+	}
 	if err == nil && (rec == nil || rec.Group != g.Name || rec.ActiveClusterID != g.ClusterID || rec.Phase != store.PhaseStable) {
 		err = fmt.Errorf("Release requires a stable handoff owned by this cluster")
 	}
@@ -249,17 +254,38 @@ func (s *Service) doRelease(taskID string, g config.LocalHAGroup) {
 	}
 	s.tasks.setStep(taskID, StepTokenNeutral, StepDone, "both sides fenced")
 
-	// 5. Write handoff (phase=released) so the peer can take over.
-	s.tasks.setStep(taskID, StepWriteHandoff, StepRunning, "publishing handoff record")
-	rec.Phase = store.PhaseReleased
+	// Persist the completed side effects before publishing the final phase.
+	rec.Phase = store.PhaseReleaseReady
 	rec.ReleasedBy = g.ClusterID
 	rec.RecoveryPoint = rp
 	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag); err != nil {
 		s.failTask(taskID, StepWriteHandoff, err)
 		return
 	}
+	etag, err = s.reservedHandoffETag(ctx, g, rec)
+	if err != nil {
+		s.failTask(taskID, StepWriteHandoff, err)
+		return
+	}
+	s.finishRelease(ctx, taskID, g, rec, etag)
+}
+
+func (s *Service) finishRelease(ctx context.Context, taskID string, g config.LocalHAGroup, rec *store.HandoffRecord, etag string) {
+	s.tasks.setStep(taskID, StepWriteHandoff, StepRunning, "publishing handoff record")
+	rec.Phase = store.PhaseReleased
+	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag); err != nil {
+		s.failTask(taskID, StepWriteHandoff, err)
+		return
+	}
+	s.tasks.update(taskID, func(t *HATask) {
+		t.RecoveryPoint = rec.RecoveryPoint
+		t.Epoch = rec.Epoch
+		for i := range t.Steps {
+			t.Steps[i].Status = StepDone
+		}
+		t.Status = TaskSucceeded
+	})
 	s.tasks.setStep(taskID, StepWriteHandoff, StepDone, "released; peer may now Promote")
-	s.tasks.update(taskID, func(t *HATask) { t.Status = TaskSucceeded })
 }
 
 // reservedHandoffETag confirms that the reservation is visible before changing
@@ -312,6 +338,11 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 	// 1. Read handoff and gate on it unless forcing.
 	s.tasks.setStep(taskID, StepReadHandoff, StepRunning, "reading handoff record")
 	rec, handoffETag, _, err := s.coord.ReadHandoffWithETag(ctx, g.HandoffKey)
+	if err == nil && rec != nil && rec.Group == g.Name && rec.ActiveClusterID == g.ClusterID &&
+		rec.Phase == store.PhaseVerifying {
+		s.finishPromotion(ctx, taskID, g, acc, rec, handoffETag)
+		return
+	}
 	if err == nil {
 		err = validatePromotion(g, rec, force)
 	}
@@ -377,19 +408,43 @@ func (s *Service) doPromote(taskID string, g config.LocalHAGroup, force bool) {
 	}
 	s.tasks.setStep(taskID, StepStartLocal, StepDone, "start requested")
 
-	// 5. Publish stable only after observing local readiness.
-	s.tasks.setStep(taskID, StepVerifyLocal, StepRunning, "waiting for local RUNNING/STABLE")
-	if !s.verifyLocal(ctx, acc, g.Deployment, previousJobID, 90*time.Second) {
-		s.failTask(taskID, StepVerifyLocal, fmt.Errorf("local readiness could not be confirmed"))
-		return
-	}
-	newRec.Phase = store.PhaseStable
+	newRec.Phase = store.PhaseVerifying
+	newRec.PreviousJobID = previousJobID
+	newRec.RedeployNonce = nonce
 	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, newRec, reservationETag); err != nil {
 		s.failTask(taskID, StepVerifyLocal, err)
 		return
 	}
+	reservationETag, err = s.reservedHandoffETag(ctx, g, newRec)
+	if err != nil {
+		s.failTask(taskID, StepVerifyLocal, err)
+		return
+	}
+	s.finishPromotion(ctx, taskID, g, acc, newRec, reservationETag)
+}
+
+func (s *Service) finishPromotion(ctx context.Context, taskID string, g config.LocalHAGroup, acc cluster.ClusterAccessor, rec *store.HandoffRecord, etag string) {
+	s.tasks.setStep(taskID, StepVerifyLocal, StepRunning, "waiting for local RUNNING/STABLE")
+	if rec.RecoveryPoint.Path == "" || rec.RedeployNonce == 0 || !s.verifyLocal(ctx, acc, g.Deployment, rec, 90*time.Second) {
+		s.failTask(taskID, StepVerifyLocal, fmt.Errorf("local readiness could not be confirmed"))
+		return
+	}
+	rec.Phase = store.PhaseStable
+	rec.PreviousJobID = ""
+	rec.RedeployNonce = 0
+	if err := s.coord.WriteHandoffCAS(ctx, g.HandoffKey, rec, etag); err != nil {
+		s.failTask(taskID, StepVerifyLocal, err)
+		return
+	}
+	s.tasks.update(taskID, func(t *HATask) {
+		t.Epoch = rec.Epoch
+		t.RecoveryPoint = rec.RecoveryPoint
+		for i := range t.Steps {
+			t.Steps[i].Status = StepDone
+		}
+		t.Status = TaskSucceeded
+	})
 	s.tasks.setStep(taskID, StepVerifyLocal, StepDone, "local RUNNING/STABLE")
-	s.tasks.update(taskID, func(t *HATask) { t.Status = TaskSucceeded })
 }
 
 func validatePromotion(g config.LocalHAGroup, rec *store.HandoffRecord, force bool) error {
@@ -462,12 +517,12 @@ func (s *Service) waitLocalStopped(ctx context.Context, acc cluster.ClusterAcces
 }
 
 // verifyLocal requires a fresh job ID so stale pre-patch status cannot complete promotion.
-func (s *Service) verifyLocal(ctx context.Context, acc cluster.ClusterAccessor, dep, previousJobID string, timeout time.Duration) bool {
+func (s *Service) verifyLocal(ctx context.Context, acc cluster.ClusterAccessor, dep string, rec *store.HandoffRecord, timeout time.Duration) bool {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for ctx.Err() == nil {
 		deployment, err := acc.GetFlinkDeployment(ctx, dep)
-		if err == nil && promotedJobReady(deployment, previousJobID) && ctx.Err() == nil {
+		if err == nil && promotionSpecMatches(deployment, rec) && promotedJobReady(deployment, rec.PreviousJobID) && ctx.Err() == nil {
 			return true
 		}
 		select {
@@ -476,6 +531,13 @@ func (s *Service) verifyLocal(ctx context.Context, acc cluster.ClusterAccessor, 
 		}
 	}
 	return false
+}
+
+func promotionSpecMatches(deployment *unstructured.Unstructured, rec *store.HandoffRecord) bool {
+	state, _, _ := unstructured.NestedString(deployment.Object, "spec", "job", "state")
+	path, _, _ := unstructured.NestedString(deployment.Object, "spec", "job", "initialSavepointPath")
+	nonce, _, _ := unstructured.NestedInt64(deployment.Object, "spec", "job", "savepointRedeployNonce")
+	return state == "running" && path == rec.RecoveryPoint.Path && nonce == rec.RedeployNonce
 }
 
 func promotedJobReady(deployment *unstructured.Unstructured, previousJobID string) bool {

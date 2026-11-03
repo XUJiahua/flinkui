@@ -1,6 +1,7 @@
 package failover
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -44,11 +45,11 @@ func TestDeriveRole(t *testing.T) {
 	s := &Service{}
 	g := grp()
 	tests := []struct {
-		name        string
-		pointsTo    string
+		name         string
+		pointsTo     string
 		localHealthy bool
-		wantRole    string
-		wantWarn    bool
+		wantRole     string
+		wantWarn     bool
 	}{
 		{"active ok", PointsSelf, true, RoleActive, false},
 		{"active but local down", PointsSelf, false, RoleActive, true},
@@ -71,9 +72,6 @@ func TestDeriveRole(t *testing.T) {
 	}
 }
 
-// TestDeriveRoleSuspendedOwner verifies that when this side owns the group
-// (token=self) but the local job was plainly suspended, the warning steers the
-// operator to Resume rather than Promote.
 func TestDeriveRoleSuspendedOwner(t *testing.T) {
 	s := &Service{}
 	g := grp()
@@ -88,15 +86,13 @@ func TestDeriveRoleSuspendedOwner(t *testing.T) {
 	if v.Role != RoleActive {
 		t.Fatalf("Role = %q, want active", v.Role)
 	}
-	if !strings.Contains(v.Warning, "Resume") {
-		t.Errorf("warning should mention Resume, got %q", v.Warning)
-	}
-	if !strings.Contains(v.Warning, "Promote does not apply") {
-		t.Errorf("warning should clarify Promote does not apply, got %q", v.Warning)
+	if !strings.Contains(v.Warning, "HA handoff workflow") {
+		t.Errorf("warning should direct the operator to the HA workflow, got %q", v.Warning)
 	}
 }
 
-func TestStatePatchJSON(t *testing.T) {	var m map[string]any
+func TestStatePatchJSON(t *testing.T) {
+	var m map[string]any
 	json.Unmarshal(statePatchJSON("suspended", "", 0), &m)
 	job := m["spec"].(map[string]any)["job"].(map[string]any)
 	if job["state"] != "suspended" {
@@ -127,5 +123,19 @@ func TestTaskStore(t *testing.T) {
 	got, _ = s.get(task.ID)
 	if got.FinishedAt == nil {
 		t.Error("expected FinishedAt")
+	}
+}
+
+func TestSecretSyncDoesNotRestartHADeployment(t *testing.T) {
+	s := NewService(&config.Config{
+		DeploymentPrefix: "flink-",
+		Cluster:          config.ClusterConfig{Namespace: "jobs"},
+		HA:               config.HAConfig{Groups: []config.LocalHAGroup{{Name: "orders"}}},
+	}, nil, nil)
+	if ok, _ := s.SafeToRestart(context.Background(), "flink-orders"); ok {
+		t.Fatal("automatic restart allowed for an HA deployment")
+	}
+	if ok, reason := s.SafeToRestart(context.Background(), "flink-other"); !ok {
+		t.Fatalf("unmanaged deployment blocked: %s", reason)
 	}
 }

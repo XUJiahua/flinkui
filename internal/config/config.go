@@ -457,6 +457,21 @@ func (c *Config) AllowedOriginList() []string {
 	return out
 }
 
+// IsLocalHADeployment checks ownership policy for a resource in the console's
+// configured namespace. AutoAll applies without a live Kubernetes listing.
+func (c *Config) IsLocalHADeployment(deployment string) bool {
+	if c.HA.AutoAll {
+		return true
+	}
+	for _, group := range c.HA.Groups {
+		group = c.NormalizeGroup(group)
+		if group.Namespace == c.Cluster.Namespace && group.Deployment == deployment {
+			return true
+		}
+	}
+	return false
+}
+
 // HAGroupByName returns a declared local HA group by name.
 func (c *Config) HAGroupByName(name string) (LocalHAGroup, bool) {
 	for _, g := range c.HA.Groups {

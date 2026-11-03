@@ -266,8 +266,16 @@ Helm 里对应 `ha.selfClusterId` / `ha.defaultPeerClusterId` / `ha.autoAll` / `
 ### 7.6 前提与注意
 
 - **共享 S3 必须两侧可达且强一致**（它是唯一协调平面）。S3 也不可达时只能纯人工。
-- 交接进度在内存中，S3 持久化 `releasing` / `promoting`。操作失败或重启时可能停在中间阶段。此时先核对两侧 FlinkDeployment、Pod、token 和 handoff，再人工处置。保留当前 epoch，避免删除交接对象或直接重试强制接管。
+- 界面任务进度在内存中。若 S3 已持久化 `release_ready` 或 `verifying`，可在原操作侧重试相同的 Release 或 Promote 来完成最后的 CAS。重试保留原 epoch，不重复发出暂停、启动或 token 写入。
+- 若记录仍是 `releasing` 或 `promoting`，外部写入结果可能不明。先核对两侧 FlinkDeployment、Pod、token 和 handoff，再人工处置。保留当前 epoch，避免删除交接对象或直接强制接管。
 - 单集群双 namespace（无分区）场景可直接用常规运维/回滚，不需要去中心切换。
+
+
+### 7.7 HA 作业启动准入
+
+FlinkUI 对 HA 管理的作业拒绝普通 Jobs API 的 Resume、Restart、Rollback、Replay 和 Revert，返回 HTTP 409（`ha_managed_job`）。`ha.auto_all` 对控制台所在 namespace 的所有作业生效。HA 作业的 JobManager 代理保留只读访问，Secret 同步继续更新 Secret 并跳过自动重启。
+
+需要恢复已暂停的 HA 作业时，可在确认本侧拥有执行权和具备可用恢复点后，使用 HA 的 Release → 同组 Promote。普通 API 的 Suspend 仍可用于紧急停机。请在 Kubernetes RBAC 和 GitOps 中限制其他身份直接修改 HA 作业的运行状态。
 
 ---
 
